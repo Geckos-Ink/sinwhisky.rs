@@ -1,0 +1,14 @@
+[package]
+name = "sinwhisky"
+version = "0.1.0"
+edition = "2021"
+description = "Circle-based signal resampling and reusable geometry for audio codec research"
+license = "MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "sinwhisky"
+path = "src/main.rs"
