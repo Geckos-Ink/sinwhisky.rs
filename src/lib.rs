@@ -10,10 +10,12 @@
 //! ```
 #![forbid(unsafe_code)]
 
+pub mod aft;
 pub mod analysis;
 pub mod codec;
 pub mod geometry;
 pub mod resample;
+pub mod spectral;
 
 pub use analysis::{Analysis, AnalysisParams, Aperture, LocalCircle, LocalModel, Primitive};
 pub use resample::{resample, Interpolation, ResampleParams};

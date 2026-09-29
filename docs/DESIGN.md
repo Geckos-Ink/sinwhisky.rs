@@ -90,6 +90,53 @@ count, coverage, parameter precision, residual strategy, and resource limits.
 Do not serialize Rust memory layouts or adopt the Python prototype format without
 a specification and malformed-input tests.
 
+## Spectral and hierarchical research
+
+The separate [compression experiment](COMPRESSION.md) adds finite-interval
+circle transforms and a tool-local, versioned PCM16 test envelope. `spectral`
+uses the retained geometry without altering fitting, blending, or source-anchor
+copying. Equal-angle integrals are analytic; uniform-x integrals use bounded-work
+quadrature. `frame_dft_bin` sums discrete segment predictions and is deliberately
+not labeled an FFT or the original source's spectrum.
+
+The NumPy lab imports the default Rust analysis descriptors through
+`examples/export_circles.rs`. Parent spans extrapolate existing local circles;
+children restrict the parent's function for diagnostics, then may select another
+source-informed circle or line. Predicted subarcs alone cannot reveal source
+error. All integer positions are checked after serialization and reconstruction.
+The optional SWR1 envelope has explicit endian fields, bounded decompression,
+coverage, raw fallback, quantized residuals, and malformed-input tests. It is not
+a serialization of `ResearchFrame` and carries no stable compatibility promise.
+Full framing, models, and residuals count toward byte measurements. The Rust core
+remains dependency-free; no audio data or Python packages enter Cargo.
+
+## Periodic angular Fourier model
+
+`aft::AngularFrame` defines a separate continuous interpolation policy for AFT.
+It fits `Analysis` once with periodic source halos and the caller's explicit
+parameters. On each unit sample interval it averages the right angular half of
+the left circle and the left angular half of the right circle. Missing or
+numerically inconsistent circle halves become the source-pair line. The closing
+interval from last sample to first is included, so one frame spans `[0,N]`.
+This uses neither the original resampler's finite-zoom window nor its centered
+line fallback. It does not change either established resampling mode.
+
+Each prepared half has a closed sine integral, with sinc limits at resonance;
+line halves use the derivative of sinc. Global phases are applied at interval
+midpoints and accumulated with compensation. Geometry is independent of requested
+frequencies. `fourier` accepts radians per sample; `spectrum` evaluates `N/2+1`
+bins at `2*pi*k/N`, with no FFT approximation. The same frame can be evaluated at
+fractional times for independent numerical integration. Direct cost is O(N) per
+frequency and O(N²) for a full spectrum.
+
+The integral is linear in an already-fixed waveform. The process of fitting that
+waveform from samples is generally nonlinear, so AFT is not an alternative DFT
+algorithm or an established inverse transform. The continuous coefficient at
+Nyquist need not be real. Do not feed these coefficients to a discrete inverse
+FFT and assume exact reconstruction. The [current comparison](COMPRESSION.md#angular-fourier-transform-aft-current-benchmark)
+uses identical periodic-Hann-windowed samples, a linear-interpolation control,
+and a dense midpoint-FFT check with the required integration weight/phase.
+
 ## Scope boundaries
 
 Fast Linear Transform (FLT) is a separate calibration/equalization idea.

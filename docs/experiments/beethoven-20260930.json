@@ -1,0 +1,1366 @@
+{
+  "format": "SWR1",
+  "numpy": "2.3.5",
+  "zlib": "1.2.12",
+  "ffmpeg": "ffmpeg version 7.1.1 Copyright (c) 2000-2025 the FFmpeg developers",
+  "rate": 44100,
+  "channels": 2,
+  "block": 256,
+  "fourier_bins": 8,
+  "tolerances_pcm16": [
+    0,
+    16,
+    128
+  ],
+  "normalization": "PCM16 / 32768 for Rust; no gain; independent channels",
+  "excerpts": [
+    {
+      "start_seconds": 60,
+      "frames": 44100,
+      "pcm16_bytes": 176400,
+      "analysis_export_seconds": 0.9447607910042279,
+      "hierarchy": [
+        {
+          "depth": 0,
+          "parent_rmse_pcm16": 769.989495437373,
+          "children_rmse_pcm16": 692.6319696203287,
+          "parent_circle_uses": 0,
+          "child_circle_uses": 3
+        },
+        {
+          "depth": 1,
+          "parent_rmse_pcm16": 692.6319696203287,
+          "children_rmse_pcm16": 657.9085030275935,
+          "parent_circle_uses": 6,
+          "child_circle_uses": 42
+        },
+        {
+          "depth": 2,
+          "parent_rmse_pcm16": 657.9085030275935,
+          "children_rmse_pcm16": 513.351779496742,
+          "parent_circle_uses": 84,
+          "child_circle_uses": 475
+        },
+        {
+          "depth": 3,
+          "parent_rmse_pcm16": 513.351779496742,
+          "children_rmse_pcm16": 165.06842527471974,
+          "parent_circle_uses": 950,
+          "child_circle_uses": 3136
+        }
+      ],
+      "trials": [
+        {
+          "method": "pcm",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 165577,
+          "pcm_ratio": 0.9386451247165533,
+          "encode_seconds": 0.010825124998518731,
+          "decode_seconds": 0.00310745900060283,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "delta",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 154870,
+          "pcm_ratio": 0.8779478458049886,
+          "encode_seconds": 0.02180479099479271,
+          "decode_seconds": 0.005211000003328081,
+          "selected_nodes": {
+            "D": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 165575,
+          "pcm_ratio": 0.9386337868480725,
+          "encode_seconds": 0.9578057500038994,
+          "decode_seconds": 0.00317354200524278,
+          "selected_nodes": {
+            "R": 348,
+            "S": 2
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 165575,
+          "pcm_ratio": 0.9386337868480725,
+          "encode_seconds": 2.9887657910003327,
+          "decode_seconds": 0.002963957995234523,
+          "selected_nodes": {
+            "R": 348,
+            "S": 2
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 165543,
+          "pcm_ratio": 0.9384523809523809,
+          "encode_seconds": 1.3351103750028415,
+          "decode_seconds": 0.003343667005538009,
+          "selected_nodes": {
+            "R": 341,
+            "Q": 7,
+            "L": 7,
+            "S": 2
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 165543,
+          "pcm_ratio": 0.9384523809523809,
+          "encode_seconds": 4.414441084001737,
+          "decode_seconds": 0.0030470839992631227,
+          "selected_nodes": {
+            "R": 341,
+            "Q": 7,
+            "L": 7,
+            "S": 2
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 165577,
+          "pcm_ratio": 0.9386451247165533,
+          "encode_seconds": 0.059130625006218906,
+          "decode_seconds": 0.003130541001155507,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 165577,
+          "pcm_ratio": 0.9386451247165533,
+          "encode_seconds": 0.0585756250002305,
+          "decode_seconds": 0.0029971670010127127,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 165577,
+          "pcm_ratio": 0.9386451247165533,
+          "encode_seconds": 0.16092466700501973,
+          "decode_seconds": 0.002813375002006069,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 165456,
+          "pcm_ratio": 0.9379591836734694,
+          "encode_seconds": 0.9977217080013361,
+          "decode_seconds": 0.004077500001585577,
+          "selected_nodes": {
+            "S": 169,
+            "R": 425,
+            "L": 90
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 0.6452073441978189,
+          "snr_db": 59.4390555594132,
+          "relative_l2_error": 0.0010667121014551763,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 165456,
+          "pcm_ratio": 0.9379591836734694,
+          "encode_seconds": 3.1750558330022614,
+          "decode_seconds": 0.0039410829995176755,
+          "selected_nodes": {
+            "S": 169,
+            "R": 425,
+            "L": 90
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 0.6452073441978189,
+          "snr_db": 59.4390555594132,
+          "relative_l2_error": 0.0010667121014551763,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 113219,
+          "pcm_ratio": 0.6418310657596372,
+          "encode_seconds": 1.3678762500057928,
+          "decode_seconds": 0.009086209000088274,
+          "selected_nodes": {
+            "Q": 383,
+            "L": 383,
+            "S": 38,
+            "R": 1
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.48258099905443,
+          "snr_db": 36.09451038151187,
+          "relative_l2_error": 0.015677415943391663,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 113219,
+          "pcm_ratio": 0.6418310657596372,
+          "encode_seconds": 4.58069429200259,
+          "decode_seconds": 0.008491500004311092,
+          "selected_nodes": {
+            "Q": 383,
+            "L": 383,
+            "S": 38,
+            "R": 1
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.48258099905443,
+          "snr_db": 36.09451038151187,
+          "relative_l2_error": 0.015677415943391663,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 105607,
+          "pcm_ratio": 0.5986791383219955,
+          "encode_seconds": 0.05544420799560612,
+          "decode_seconds": 0.010232542001176625,
+          "selected_nodes": {
+            "Q": 345,
+            "F": 345,
+            "R": 1
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.522260588327654,
+          "snr_db": 36.05824035710471,
+          "relative_l2_error": 0.015743017642503045,
+          "max_boundary_jump_error_pcm16": 31
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 108960,
+          "pcm_ratio": 0.617687074829932,
+          "encode_seconds": 0.05997025000397116,
+          "decode_seconds": 0.014426207999349572,
+          "selected_nodes": {
+            "Q": 346,
+            "B": 346,
+            "L": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.518671828500278,
+          "snr_db": 36.06151452157154,
+          "relative_l2_error": 0.015737084397056435,
+          "max_boundary_jump_error_pcm16": 31
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 108960,
+          "pcm_ratio": 0.617687074829932,
+          "encode_seconds": 0.1753771669973503,
+          "decode_seconds": 0.013313290997757576,
+          "selected_nodes": {
+            "Q": 346,
+            "B": 346,
+            "L": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.518671828500278,
+          "snr_db": 36.06151452157154,
+          "relative_l2_error": 0.015737084397056435,
+          "max_boundary_jump_error_pcm16": 31
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 116854,
+          "pcm_ratio": 0.6624376417233561,
+          "encode_seconds": 1.042591875004291,
+          "decode_seconds": 0.05465199999889592,
+          "selected_nodes": {
+            "S": 6115,
+            "L": 5550,
+            "R": 911
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 38.517196883759766,
+          "snr_db": 23.91994813284913,
+          "relative_l2_error": 0.06367993234968673,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 116979,
+          "pcm_ratio": 0.6631462585034014,
+          "encode_seconds": 3.3208900000026915,
+          "decode_seconds": 0.055542541995237116,
+          "selected_nodes": {
+            "S": 6081,
+            "L": 5511,
+            "R": 899,
+            "C": 17
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 38.53260715366866,
+          "snr_db": 23.916473707257047,
+          "relative_l2_error": 0.06370540992917545,
+          "max_boundary_jump_error_pcm16": 108
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 43530,
+          "pcm_ratio": 0.2467687074829932,
+          "encode_seconds": 1.3491637499973876,
+          "decode_seconds": 0.00703987500310177,
+          "selected_nodes": {
+            "Q": 349,
+            "L": 349,
+            "S": 3
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 73.77754691348466,
+          "snr_db": 18.274557384360563,
+          "relative_l2_error": 0.1219753662384879,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 43530,
+          "pcm_ratio": 0.2467687074829932,
+          "encode_seconds": 4.601560374998371,
+          "decode_seconds": 0.0075517919976846315,
+          "selected_nodes": {
+            "Q": 349,
+            "L": 349,
+            "S": 3
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 73.77754691348466,
+          "snr_db": 18.274557384360563,
+          "relative_l2_error": 0.1219753662384879,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 50427,
+          "pcm_ratio": 0.2858673469387755,
+          "encode_seconds": 0.044652959004451986,
+          "decode_seconds": 0.009552166993671563,
+          "selected_nodes": {
+            "Q": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 67.74933650134061,
+          "snr_db": 19.01494067648095,
+          "relative_l2_error": 0.11200901192684103,
+          "max_boundary_jump_error_pcm16": 251
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 53879,
+          "pcm_ratio": 0.30543650793650795,
+          "encode_seconds": 0.04823970799770905,
+          "decode_seconds": 0.013159833004465327,
+          "selected_nodes": {
+            "Q": 346,
+            "B": 346,
+            "L": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 67.09164671519783,
+          "snr_db": 19.099672574222833,
+          "relative_l2_error": 0.11092166278211886,
+          "max_boundary_jump_error_pcm16": 235
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 53879,
+          "pcm_ratio": 0.30543650793650795,
+          "encode_seconds": 0.15195816699997522,
+          "decode_seconds": 0.012995832999877166,
+          "selected_nodes": {
+            "Q": 346,
+            "B": 346,
+            "L": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 67.09164671519783,
+          "snr_db": 19.099672574222833,
+          "relative_l2_error": 0.11092166278211886,
+          "max_boundary_jump_error_pcm16": 235
+        }
+      ],
+      "flac_bytes": 57738
+    },
+    {
+      "start_seconds": 180,
+      "frames": 44100,
+      "pcm16_bytes": 176400,
+      "analysis_export_seconds": 0.7639651670033345,
+      "hierarchy": [
+        {
+          "depth": 0,
+          "parent_rmse_pcm16": 514.346001834538,
+          "children_rmse_pcm16": 323.6889566856925,
+          "parent_circle_uses": 0,
+          "child_circle_uses": 4
+        },
+        {
+          "depth": 1,
+          "parent_rmse_pcm16": 323.6889566856925,
+          "children_rmse_pcm16": 214.24473790758185,
+          "parent_circle_uses": 8,
+          "child_circle_uses": 61
+        },
+        {
+          "depth": 2,
+          "parent_rmse_pcm16": 214.24473790758185,
+          "children_rmse_pcm16": 103.26696837503081,
+          "parent_circle_uses": 122,
+          "child_circle_uses": 479
+        },
+        {
+          "depth": 3,
+          "parent_rmse_pcm16": 103.26696837503081,
+          "children_rmse_pcm16": 37.97653112252057,
+          "parent_circle_uses": 958,
+          "child_circle_uses": 2230
+        }
+      ],
+      "trials": [
+        {
+          "method": "pcm",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 157452,
+          "pcm_ratio": 0.8925850340136054,
+          "encode_seconds": 0.0107709169969894,
+          "decode_seconds": 0.003228375004255213,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "delta",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 127727,
+          "pcm_ratio": 0.7240759637188209,
+          "encode_seconds": 0.019023749999178108,
+          "decode_seconds": 0.004705917002866045,
+          "selected_nodes": {
+            "D": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 157450,
+          "pcm_ratio": 0.8925736961451247,
+          "encode_seconds": 0.9376530830049887,
+          "decode_seconds": 0.0031548330007353798,
+          "selected_nodes": {
+            "R": 348,
+            "S": 2
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 157450,
+          "pcm_ratio": 0.8925736961451247,
+          "encode_seconds": 2.8444008750011562,
+          "decode_seconds": 0.0029599589979625307,
+          "selected_nodes": {
+            "R": 348,
+            "S": 2
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 157336,
+          "pcm_ratio": 0.8919274376417233,
+          "encode_seconds": 1.3130531250062631,
+          "decode_seconds": 0.003482541003904771,
+          "selected_nodes": {
+            "R": 328,
+            "Q": 20,
+            "L": 20,
+            "S": 2
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 157336,
+          "pcm_ratio": 0.8919274376417233,
+          "encode_seconds": 4.198799916994176,
+          "decode_seconds": 0.0032349999964935705,
+          "selected_nodes": {
+            "R": 328,
+            "Q": 20,
+            "L": 20,
+            "S": 2
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 157452,
+          "pcm_ratio": 0.8925850340136054,
+          "encode_seconds": 0.05251841599965701,
+          "decode_seconds": 0.0028772090008715168,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 157452,
+          "pcm_ratio": 0.8925850340136054,
+          "encode_seconds": 0.05654441699880408,
+          "decode_seconds": 0.0029349169999477454,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 157452,
+          "pcm_ratio": 0.8925850340136054,
+          "encode_seconds": 0.157204917006311,
+          "decode_seconds": 0.002976834002765827,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 152491,
+          "pcm_ratio": 0.8644614512471656,
+          "encode_seconds": 1.025704958003189,
+          "decode_seconds": 0.022760874999221414,
+          "selected_nodes": {
+            "S": 2810,
+            "L": 1820,
+            "R": 1336
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 2.779455729033989,
+          "snr_db": 44.93465162240204,
+          "relative_l2_error": 0.005665880609247226,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 152478,
+          "pcm_ratio": 0.8643877551020408,
+          "encode_seconds": 3.12034529200173,
+          "decode_seconds": 0.022956250002607703,
+          "selected_nodes": {
+            "S": 2824,
+            "L": 1824,
+            "R": 1340,
+            "C": 6
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 2.786050040816204,
+          "snr_db": 44.91406859058014,
+          "relative_l2_error": 0.005679323019165073,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 76448,
+          "pcm_ratio": 0.4333786848072562,
+          "encode_seconds": 1.3602170829981333,
+          "decode_seconds": 0.009616374998586252,
+          "selected_nodes": {
+            "Q": 464,
+            "L": 468,
+            "S": 122
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.451277973311239,
+          "snr_db": 34.30403611337991,
+          "relative_l2_error": 0.01926629449147622,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 76462,
+          "pcm_ratio": 0.4334580498866213,
+          "encode_seconds": 4.396598291001283,
+          "decode_seconds": 0.00950508400273975,
+          "selected_nodes": {
+            "Q": 463,
+            "L": 465,
+            "S": 121,
+            "C": 2
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.450912684333371,
+          "snr_db": 34.3043718268224,
+          "relative_l2_error": 0.019265549855137946,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 79659,
+          "pcm_ratio": 0.4515816326530612,
+          "encode_seconds": 0.053771541999594774,
+          "decode_seconds": 0.00953004199982388,
+          "selected_nodes": {
+            "Q": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.524152969997823,
+          "snr_db": 34.23731960058456,
+          "relative_l2_error": 0.01941484912622444,
+          "max_boundary_jump_error_pcm16": 32
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 72910,
+          "pcm_ratio": 0.4133219954648526,
+          "encode_seconds": 0.05979529100295622,
+          "decode_seconds": 0.013400333002209663,
+          "selected_nodes": {
+            "Q": 346,
+            "B": 346,
+            "L": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.502419431738916,
+          "snr_db": 34.2571629221119,
+          "relative_l2_error": 0.019370545620431858,
+          "max_boundary_jump_error_pcm16": 32
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 72910,
+          "pcm_ratio": 0.4133219954648526,
+          "encode_seconds": 0.16790820800088113,
+          "decode_seconds": 0.0129969169938704,
+          "selected_nodes": {
+            "Q": 346,
+            "B": 346,
+            "L": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.502419431738916,
+          "snr_db": 34.2571629221119,
+          "relative_l2_error": 0.019370545620431858,
+          "max_boundary_jump_error_pcm16": 32
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 54907,
+          "pcm_ratio": 0.3112641723356009,
+          "encode_seconds": 1.0373143750039162,
+          "decode_seconds": 0.04659458300011465,
+          "selected_nodes": {
+            "S": 4524,
+            "L": 4861,
+            "R": 9
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 46.58981560778436,
+          "snr_db": 20.44802701058861,
+          "relative_l2_error": 0.09497267039842142,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 54994,
+          "pcm_ratio": 0.31175736961451245,
+          "encode_seconds": 3.239881665998837,
+          "decode_seconds": 0.046241208001447376,
+          "selected_nodes": {
+            "S": 4500,
+            "L": 4821,
+            "C": 17,
+            "R": 8
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 46.655439854610854,
+          "snr_db": 20.435801078946323,
+          "relative_l2_error": 0.09510644448365212,
+          "max_boundary_jump_error_pcm16": 109
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 23442,
+          "pcm_ratio": 0.13289115646258504,
+          "encode_seconds": 1.3241580000030808,
+          "decode_seconds": 0.007019832999503706,
+          "selected_nodes": {
+            "Q": 347,
+            "L": 347,
+            "S": 1
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 72.7245491244289,
+          "snr_db": 16.580226094765646,
+          "relative_l2_error": 0.1482479495521802,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 23442,
+          "pcm_ratio": 0.13289115646258504,
+          "encode_seconds": 4.423492624999199,
+          "decode_seconds": 0.007045958001981489,
+          "selected_nodes": {
+            "Q": 347,
+            "L": 347,
+            "S": 1
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 72.7245491244289,
+          "snr_db": 16.580226094765646,
+          "relative_l2_error": 0.1482479495521802,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 39922,
+          "pcm_ratio": 0.22631519274376416,
+          "encode_seconds": 0.03348333400208503,
+          "decode_seconds": 0.009866583000984974,
+          "selected_nodes": {
+            "Q": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 45.752041824007804,
+          "snr_db": 20.60563723184542,
+          "relative_l2_error": 0.0932648805650194,
+          "max_boundary_jump_error_pcm16": 246
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 40824,
+          "pcm_ratio": 0.23142857142857143,
+          "encode_seconds": 0.034853999997721985,
+          "decode_seconds": 0.013961332995677367,
+          "selected_nodes": {
+            "Q": 346,
+            "B": 346,
+            "L": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 34.87501590958602,
+          "snr_db": 22.963558554747237,
+          "relative_l2_error": 0.0710922193597909,
+          "max_boundary_jump_error_pcm16": 208
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 40824,
+          "pcm_ratio": 0.23142857142857143,
+          "encode_seconds": 0.13060633299755864,
+          "decode_seconds": 0.013886125001590699,
+          "selected_nodes": {
+            "Q": 346,
+            "B": 346,
+            "L": 346,
+            "F": 346
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 34.87501590958602,
+          "snr_db": 22.963558554747237,
+          "relative_l2_error": 0.0710922193597909,
+          "max_boundary_jump_error_pcm16": 208
+        }
+      ],
+      "flac_bytes": 52744
+    },
+    {
+      "start_seconds": 300,
+      "frames": 44100,
+      "pcm16_bytes": 176400,
+      "analysis_export_seconds": 0.8132427079981426,
+      "hierarchy": [
+        {
+          "depth": 0,
+          "parent_rmse_pcm16": 4078.0454937317186,
+          "children_rmse_pcm16": 3763.244116197518,
+          "parent_circle_uses": 2,
+          "child_circle_uses": 1
+        },
+        {
+          "depth": 1,
+          "parent_rmse_pcm16": 3763.244116197518,
+          "children_rmse_pcm16": 3140.3413894279383,
+          "parent_circle_uses": 2,
+          "child_circle_uses": 48
+        },
+        {
+          "depth": 2,
+          "parent_rmse_pcm16": 3140.3413894279383,
+          "children_rmse_pcm16": 1931.2215292840094,
+          "parent_circle_uses": 96,
+          "child_circle_uses": 547
+        },
+        {
+          "depth": 3,
+          "parent_rmse_pcm16": 1931.2215292840094,
+          "children_rmse_pcm16": 812.9451123905212,
+          "parent_circle_uses": 1094,
+          "child_circle_uses": 2555
+        }
+      ],
+      "trials": [
+        {
+          "method": "pcm",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 179584,
+          "pcm_ratio": 1.0180498866213152,
+          "encode_seconds": 0.010417082994536031,
+          "decode_seconds": 0.0019555000035325065,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "delta",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 180713,
+          "pcm_ratio": 1.0244501133786847,
+          "encode_seconds": 0.019740041003387887,
+          "decode_seconds": 0.00538599999708822,
+          "selected_nodes": {
+            "D": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 179584,
+          "pcm_ratio": 1.0180498866213152,
+          "encode_seconds": 0.953541042006691,
+          "decode_seconds": 0.001615708002645988,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 179584,
+          "pcm_ratio": 1.0180498866213152,
+          "encode_seconds": 2.9910270420004963,
+          "decode_seconds": 0.0016202500046347268,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 179584,
+          "pcm_ratio": 1.0180498866213152,
+          "encode_seconds": 1.339606665998872,
+          "decode_seconds": 0.0017182090014102869,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 179584,
+          "pcm_ratio": 1.0180498866213152,
+          "encode_seconds": 4.468760250005289,
+          "decode_seconds": 0.001818333003029693,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 179584,
+          "pcm_ratio": 1.0180498866213152,
+          "encode_seconds": 0.047615625000617,
+          "decode_seconds": 0.0015494999970542267,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 179584,
+          "pcm_ratio": 1.0180498866213152,
+          "encode_seconds": 0.05391445900022518,
+          "decode_seconds": 0.0015787080046720803,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 0,
+          "encoded_bytes": 179584,
+          "pcm_ratio": 1.0180498866213152,
+          "encode_seconds": 0.14077508299669717,
+          "decode_seconds": 0.0018355420033913106,
+          "selected_nodes": {
+            "R": 346
+          },
+          "max_error_pcm16": 0,
+          "rmse_pcm16": 0.0,
+          "snr_db": null,
+          "relative_l2_error": 0.0,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 179421,
+          "pcm_ratio": 1.0171258503401361,
+          "encode_seconds": 0.9672501659952104,
+          "decode_seconds": 0.001934708998305723,
+          "selected_nodes": {
+            "L": 15,
+            "S": 14,
+            "R": 345
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 0.27565629787440576,
+          "snr_db": 81.37774108001292,
+          "relative_l2_error": 8.533220067179236e-05,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 179421,
+          "pcm_ratio": 1.0171258503401361,
+          "encode_seconds": 3.05742083399673,
+          "decode_seconds": 0.0017344170046271756,
+          "selected_nodes": {
+            "L": 15,
+            "S": 14,
+            "R": 345
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 0.27565629787440576,
+          "snr_db": 81.37774108001292,
+          "relative_l2_error": 8.533220067179236e-05,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 155847,
+          "pcm_ratio": 0.8834863945578232,
+          "encode_seconds": 1.3651202920009382,
+          "decode_seconds": 0.008874541999830399,
+          "selected_nodes": {
+            "L": 351,
+            "Q": 349,
+            "S": 7,
+            "R": 2
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.445852369380276,
+          "snr_db": 50.680276390862915,
+          "relative_l2_error": 0.002924059330824098,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 155832,
+          "pcm_ratio": 0.8834013605442177,
+          "encode_seconds": 4.523314209000091,
+          "decode_seconds": 0.009025542000017595,
+          "selected_nodes": {
+            "L": 349,
+            "Q": 349,
+            "C": 2,
+            "S": 7,
+            "R": 2
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.447508039862432,
+          "snr_db": 50.678754060180566,
+          "relative_l2_error": 0.0029245718604013976,
+          "max_boundary_jump_error_pcm16": 9
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 161424,
+          "pcm_ratio": 0.9151020408163265,
+          "encode_seconds": 0.05834274999506306,
+          "decode_seconds": 0.010050333999970462,
+          "selected_nodes": {
+            "R": 34,
+            "Q": 312,
+            "F": 312
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 9.06564682639647,
+          "snr_db": 51.03712354191156,
+          "relative_l2_error": 0.0028063628517644977,
+          "max_boundary_jump_error_pcm16": 31
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 164029,
+          "pcm_ratio": 0.9298696145124716,
+          "encode_seconds": 0.06244495900318725,
+          "decode_seconds": 0.011266333000094164,
+          "selected_nodes": {
+            "R": 85,
+            "Q": 261,
+            "B": 261,
+            "L": 261,
+            "F": 261
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 8.325531722241523,
+          "snr_db": 51.776859865378746,
+          "relative_l2_error": 0.002577252720506951,
+          "max_boundary_jump_error_pcm16": 31
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 16,
+          "encoded_bytes": 164029,
+          "pcm_ratio": 0.9298696145124716,
+          "encode_seconds": 0.16322308399685426,
+          "decode_seconds": 0.011119332993985154,
+          "selected_nodes": {
+            "R": 85,
+            "Q": 261,
+            "B": 261,
+            "L": 261,
+            "F": 261
+          },
+          "max_error_pcm16": 16,
+          "rmse_pcm16": 8.325531722241523,
+          "snr_db": 51.776859865378746,
+          "relative_l2_error": 0.002577252720506951,
+          "max_boundary_jump_error_pcm16": 31
+        },
+        {
+          "method": "line_tree",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 175100,
+          "pcm_ratio": 0.9926303854875284,
+          "encode_seconds": 1.0202380420014379,
+          "decode_seconds": 0.011125250006443821,
+          "selected_nodes": {
+            "L": 920,
+            "S": 1347,
+            "R": 773
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 15.501510057376892,
+          "snr_db": 46.37761933558113,
+          "relative_l2_error": 0.004798649539777883,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_tree",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 175093,
+          "pcm_ratio": 0.9925907029478458,
+          "encode_seconds": 3.260944791996735,
+          "decode_seconds": 0.011267249996308237,
+          "selected_nodes": {
+            "L": 920,
+            "S": 1349,
+            "R": 769,
+            "C": 6
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 15.610178957168618,
+          "snr_db": 46.31694182567359,
+          "relative_l2_error": 0.004832289099023635,
+          "max_boundary_jump_error_pcm16": 120
+        },
+        {
+          "method": "line_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 95338,
+          "pcm_ratio": 0.5404648526077097,
+          "encode_seconds": 1.386760499997763,
+          "decode_seconds": 0.008007874996110331,
+          "selected_nodes": {
+            "L": 356,
+            "Q": 354,
+            "S": 11,
+            "R": 1
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 73.69274040678724,
+          "snr_db": 32.83660532565464,
+          "relative_l2_error": 0.02281233463895451,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "circle_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 95338,
+          "pcm_ratio": 0.5404648526077097,
+          "encode_seconds": 4.649862584003131,
+          "decode_seconds": 0.007933916996989865,
+          "selected_nodes": {
+            "L": 356,
+            "Q": 354,
+            "S": 11,
+            "R": 1
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 73.69274040678724,
+          "snr_db": 32.83660532565464,
+          "relative_l2_error": 0.02281233463895451,
+          "max_boundary_jump_error_pcm16": 0
+        },
+        {
+          "method": "fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 95137,
+          "pcm_ratio": 0.5393253968253968,
+          "encode_seconds": 0.05488987499848008,
+          "decode_seconds": 0.009661083000537474,
+          "selected_nodes": {
+            "R": 2,
+            "Q": 344,
+            "F": 344
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 73.82245040415191,
+          "snr_db": 32.82133032914435,
+          "relative_l2_error": 0.02285248768319696,
+          "max_boundary_jump_error_pcm16": 253
+        },
+        {
+          "method": "line_fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 96385,
+          "pcm_ratio": 0.5464002267573697,
+          "encode_seconds": 0.05977270899893483,
+          "decode_seconds": 0.013681832999282051,
+          "selected_nodes": {
+            "R": 2,
+            "Q": 344,
+            "B": 344,
+            "L": 344,
+            "F": 344
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 73.56296915458893,
+          "snr_db": 32.85191446470187,
+          "relative_l2_error": 0.022772162632657522,
+          "max_boundary_jump_error_pcm16": 235
+        },
+        {
+          "method": "circle_fourier_residual",
+          "tolerance_pcm16": 128,
+          "encoded_bytes": 96385,
+          "pcm_ratio": 0.5464002267573697,
+          "encode_seconds": 0.15445508300035726,
+          "decode_seconds": 0.01346795899735298,
+          "selected_nodes": {
+            "R": 2,
+            "Q": 344,
+            "B": 344,
+            "L": 344,
+            "F": 344
+          },
+          "max_error_pcm16": 128,
+          "rmse_pcm16": 73.56296915458893,
+          "snr_db": 32.85191446470187,
+          "relative_l2_error": 0.022772162632657522,
+          "max_boundary_jump_error_pcm16": 235
+        }
+      ],
+      "flac_bytes": 80474
+    }
+  ],
+  "experiment_date": "2026-09-30",
+  "recording": "User-provided Beethoven MP3, 320 kbps source; decoded reference is PCM16"
+}

@@ -24,7 +24,7 @@ When sources disagree, inspect the owning behavior and fix code/docs/tests withi
 scope. Report unresolved conflicts instead of silently choosing a contract.
 While this folder is nested, also obey the ancestor repository's instruction
 files. Once extracted, this file is the root handbook. There are no deeper scoped
-instruction files in this initial crate.
+instruction files in this crate.
 
 ## Collaboration and maintenance
 
@@ -108,6 +108,9 @@ services, persistence adapters, callbacks, or networking. The optional Python
 listening tools invoke FFmpeg and the release CLI locally, per channel.
 `test_music.sh` drives a standard-library Python helper that reduces encoded
 bitrate and performs two-second block synthesis with source-sample halos.
+The separate optional NumPy compression lab imports Rust circle descriptors and
+writes bounded experimental SWR1 streams for actual byte/error comparisons;
+it does not serialize `ResearchFrame` or alter the resampler.
 
 ## Linked source reference
 
@@ -168,6 +171,84 @@ private coverage/model data; public access cannot mutate a frame's validated sta
 `decode` reconstructs without original PCM. `ErrorMetrics::between` computes
 max/RMS error and checks lengths/finiteness. Segment tests protect coverage, true
 circle reuse, metadata validation, and tolerance. No function here serializes bytes.
+
+### [src/spectral.rs](src/spectral.rs)
+
+Owns `Complex`, `angular_fourier`, `uniform_fourier`, and `frame_dft_bin`.
+Continuous arc transforms use exp(-i*omega*position), sample-position units,
+and no blending/copying of anchors. Angular integration is analytic; uniform
+integration uses explicit bounded midpoint panels after an angular substitution.
+Panel count is not an accuracy bound. The discrete frame sum reads predictors,
+never original PCM, and is O(N) per bin, not an FFT. `tests/spectral.rs` checks
+known areas, resonance, independent quadrature, scaling/phase, Parseval, extent,
+validation, and unchanged analysis. Keep continuous and sampled spectra distinct.
+
+### [src/aft.rs](src/aft.rs)
+
+Owns `AngularFrame` and `AngularStats`. Prepares periodic source halos with explicit
+analysis parameters, averages the adjacent angular halves on each unit interval,
+and closes last-to-first coverage. Degenerate/rejected halves use the actual
+source-pair line. Circle endpoint acceptance is 1e-8 times max(1, endpoint scale);
+rejections and line/circle halves are counted. The prepared geometry is immutable.
+`evaluate` extends periodically; `fourier` analytically integrates on `[0,N]`;
+`spectrum` covers the standard nonnegative bins. Full cost is O(N²), not an FFT.
+The AFT interpolation policy is separate from finite-zoom angular resampling.
+The continuous Nyquist coefficient need not be real. `tests/aft.rs` checks
+coverage, original geometry reuse, quadrature, sinc² linear control, phase shifts,
+conjugacy, constants/short inputs, and validation.
+
+### [examples/aft_bench.rs](examples/aft_bench.rs)
+
+Numeric complete frames to JSON Lines of AFT coefficients, circle/line counts,
+and warmed in-process fit/transform timing samples. Uses original analysis
+parameters on caller-supplied amplitude units, without rescaling/windowing.
+Optional dense midpoint samples support independent integration checks. Text I/O,
+warmup, and dense evaluation are excluded from the recorded transform timings.
+
+### [tools/aft_compare.py](tools/aft_compare.py)
+
+Optional NumPy/Matplotlib/Pillow/FFmpeg benchmark and graph/GIF generator. Uses
+PCM16 units, a mono downmix, identical periodic-Hann input samples for Rust AFT
+and NumPy rfft, and a periodic linear-interpolation FT control. Reports spectral
+differences separately from dense-integration discrepancies, and fitting cost
+separately from transform cost. Midpoint FFT integration requires both `1/q`
+and the half-step phase factor. Tests are `tests/test_aft_compare.py`.
+Output must be new and outside the repository: complex spectral arrays can
+reconstruct audio and must remain private. Only aggregate JSON and rendered
+figures belong in docs. Figures and the silent GIF are generated from real
+measured track windows, never invented spectra.
+
+### [examples/export_circles.rs](examples/export_circles.rs)
+
+Numeric stdin to blockwise JSON Lines of default Rust analysis circles, used by
+the compression lab. Exports block-relative anchor, aperture, center, radius,
+branch, and an anchor evaluation for cross-language validation. No refitting or
+core CLI changes. Block size is a power of two in 4..=4096; partial blocks survive.
+
+### [tools/compression_lab.py](tools/compression_lab.py)
+
+Optional NumPy/FFmpeg research harness. Compares raw/delta, recursive line/circle,
+quantized residual, and sparse Fourier predictors against a lossless FLAC control.
+`predict` evaluates exported uniform geometry; children retain source-derived
+models. `hierarchy_diagnostics` distinguishes parent restrictions from corrected
+children. `encode_stream`/`decode_stream` own the explicit little-endian SWR1
+experiment envelope, bounded allocation/decompression, exact coverage, raw
+fallback, and independent reconstruction. Every trial checks error after
+serialization, counts full file bytes, and writes only to a new directory outside
+the repository. `tests/test_compression_lab.py` covers exact/bounded round trips,
+partial blocks, circles, Fourier phase/quantization, and malformed streams.
+
+### [docs/COMPRESSION.md](docs/COMPRESSION.md)
+
+Owns Fourier conventions/derivation, subarc limits, candidate search, SWR1 format,
+reproduction, and measured Beethoven compression results. The current AFT section
+also owns the comparison definition, timing limits, and embedded graphs/GIF.
+Its snapshot is [aft-beethoven-20260930.json](docs/experiments/aft-beethoven-20260930.json),
+with rendered plots under `docs/figures/aft-20260930/`. The earlier compression snapshot
+is [experiments/beethoven-20260930.json](docs/experiments/beethoven-20260930.json).
+Contains no recording or machine-specific source paths. Do not infer perceptual
+quality or circle-specific savings from residual compression. The format is
+experimental, not a stable public codec or a fuzz-validated untrusted parser.
 
 ### [src/main.rs](src/main.rs)
 
@@ -345,11 +426,15 @@ extent, and frame-coverage tests detect these errors.
 | Geometry/models | [geometry](src/geometry.rs), [analysis](src/analysis.rs) | Local coordinates and immutable analysis views |
 | `resample`, `Analysis::resample` | [src/resample.rs](src/resample.rs) | Named interpolation contracts |
 | `ResearchFrame`, `SegmentModel` | [src/codec.rs](src/codec.rs) | Experimental in-memory prediction only |
+| Periodic angular AFT | [src/aft.rs](src/aft.rs) | Continuous angular interpolant, explicit joins and closing interval |
+| Arc transforms and frame DFT | [src/spectral.rs](src/spectral.rs) | Continuous vs. sampled transforms; no FFT speed claim |
+| SWR1 compression lab | [tools/compression_lab.py](tools/compression_lab.py) | Optional NumPy; independent byte decode and PCM16 error bounds |
 | `sinwhisky <zoom> [neighbors] [0\|1] [uniform\|angular]` | [src/main.rs](src/main.rs) | Numeric stdin/stdout, exit 2 on error |
 | Optional Python tools | [cross validation](tools/cross_validate.py), [audio comparison](tools/audio_compare.py) | Local research, explicit external prerequisites |
 | `test_music.sh INPUT DOWNSCALE_BITRATE UPSCALE OUTPUT` | [Bash wrapper](test_music.sh), [music helper](tools/music_test.py) | Encoded bitrate fraction and decoded sample-rate multiplier |
 
-No HTTP, GUI, service, plugin, hardware, or encoded-wire interface exists.
+No HTTP, GUI, service, plugin, or hardware interface exists. The optional Python
+lab has a tool-local SWR1 byte envelope; the Rust CLI has no encoded-wire API.
 
 ## Build, run, test, debug, and release
 
@@ -361,6 +446,8 @@ cargo test --offline
 cargo test --offline --test contracts
 cargo test --offline --test reference_vectors
 cargo test --offline --test cli
+cargo test --offline --test spectral
+cargo test --offline --test aft
 cargo fmt --check
 cargo clippy --offline --all-targets -- -D warnings
 cargo doc --offline --no-deps
@@ -382,9 +469,24 @@ python3 tools/audio_compare.py /path/to/music.mp3 /tmp/sinwhisky-listening \
   --start 60 --seconds 8 --factor 4 --ffmpeg /path/to/ffmpeg
 ./test_music.sh /path/to/music.mp3 0.25 2 /tmp/music-upscaled.wav --seconds 8
 python3 -m unittest discover -s tests -p test_music.py -v
+cargo build --offline --release --example export_circles
+python3 -m unittest discover -s tests -p test_compression_lab.py -v
+python3 tools/compression_lab.py /path/to/music.mp3 /tmp/compression-trial \
+  --starts 60 180 300 --seconds 1 --ffmpeg /path/to/ffmpeg
+```
+
+AFT plots require NumPy/Matplotlib/Pillow/FFmpeg and the Rust `aft_bench` example:
+
+```sh
+cargo build --offline --release --example aft_bench
+python3 -m unittest discover -s tests -p test_aft_compare.py -v
+python3 tools/aft_compare.py /path/to/music.mp3 /tmp/aft-trial \
+  --starts 60 180 300 --seconds 2 --frame 1024 --hop 512 --ffmpeg /path/to/ffmpeg
 ```
 
 Cross-validation needs NumPy/C compiler; `audio_compare.py` needs NumPy/FFmpeg.
+The compression lab needs NumPy/FFmpeg and the Rust exporter; its synthetic
+tests need NumPy (bridge test additionally needs the built exporter).
 The single-file wrapper and its tests need Python standard library/FFmpeg and a
 Rust release binary. `FFMPEG`, `PYTHON`, and `SINWHISKY_BIN` override executable
 discovery; wrapper environment settings are documented in the README. Music-script
@@ -410,8 +512,11 @@ inspect failures. No benchmark/security/fuzz automation is configured yet.
 | C/Python compatibility | Frozen vectors; optional live cross-validation tool |
 | CLI boundary | `command_line_modes_and_failures` |
 | Music wrapper/blocks/bitrate/fractional upscale | Optional `tests/test_music.py` integration suite |
+| Periodic AFT / benchmark conventions | `tests/aft.rs`, optional `tests/test_aft_compare.py` |
+| Circle transforms / predictor DFT | `tests/spectral.rs` |
+| SWR1 byte decode/error/limits/Fourier/subarcs | Optional `tests/test_compression_lab.py` |
 
-Known test gaps: no bitstream parser/fuzzing (none exists), other platforms,
+Known test gaps: SWR1 fuzzing/security and cross-platform rounding, other platforms,
 performance budgets, broad audio corpus, blind listening, or realtime behavior.
 
 ## Data, privacy, and compatibility boundaries
@@ -423,8 +528,9 @@ Private frame fields prevent mutation from invalidating checked coverage.
 
 No network or secrets are needed. Keep recordings, output audio, and local paths
 outside version control. The numeric CLI buffers all input and has no configurable
-memory cap; do not expose it as an untrusted network service. A future bitstream
-parser needs explicit allocation limits and versioning before use on untrusted data.
+memory cap; do not expose it as an untrusted network service. The tool-local SWR1
+parser has explicit limits/versioning and malformed-input tests, but no fuzzing
+or security validation; do not promote it to an untrusted service.
 Do not serialize native Rust layout or claim compatibility with legacy Python files.
 This initial unpublished API may evolve; document every behavior change.
 
@@ -433,11 +539,13 @@ This initial unpublished API may evolve; document every behavior change.
 - **Implemented:** reusable analysis, uniform/angular resampling, numeric CLI,
   standalone Cargo tests, optional live comparison and listening scripts, and
   `test_music.sh` with encoded-bitrate reduction and block-based sample-rate upscaling.
-- **Experimental/scaffold:** mono `ResearchFrame` segment approximation and metrics.
-- **Known gaps:** uniform branch mismatch; no actual compression format, native
+- **Experimental:** mono `ResearchFrame`, circle transforms/predictor DFT, and an
+  optional NumPy circle/subarc/Fourier lab with full byte/error measurements.
+  Three short Beethoven excerpts show no material circle-specific coding gain.
+- **Known gaps:** uniform branch mismatch; no stable compression format, native
   audio I/O, streaming, stereo coupling, perceptual validation, or cross-platform CI.
-- **Planned:** see [ROADMAP.md](ROADMAP.md), especially quantization/residual/encoded
-  byte measurements and a separately validated FLT implementation.
+- **Planned:** see [ROADMAP.md](ROADMAP.md), especially geometry quantization, better residual
+  coding, broader byte/error measurements and a separately validated FLT implementation.
 
 ## Task start and handoff checklist
 

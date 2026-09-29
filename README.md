@@ -121,11 +121,36 @@ The current experiment reuses the circle centered at `start+1`; it does not sear
 all possible circles or refit a segment. Inspect `frame.segments()` to study its
 choices. `frame.decode()` works without the original `Analysis`.
 
-This is an in-memory approximation model. There is **no** encoded bitstream,
-quantization, residual coder, entropy coding, stereo coupling, streaming decoder,
-or guaranteed size reduction. Segment counts are not compression ratios. Before
-claiming a codec, measure actual encoded bytes and distortion after quantization.
-See [the roadmap](ROADMAP.md).
+`ResearchFrame` remains an in-memory approximation model without a bitstream.
+Segment counts are not compression ratios. A separate optional
+[circle/Fourier compression lab](docs/COMPRESSION.md) now measures actual bytes
+for recursive circle/line predictors, Fourier residuals, and raw/delta/FLAC
+controls. Its experimental SWR1 streams are decoded independently and checked
+against PCM16 error bounds; this is not a stable audio format or a quality claim.
+The resampler's contracts and dependencies are unchanged.
+
+The Rust `spectral` module also computes analytic transforms of equal-angle arcs,
+numerical transforms of uniform-x arcs, and DFT bins directly from retained frame
+predictors. `aft::AngularFrame` extends this to a complete periodic angular
+interpolant: prepare geometry once, evaluate it at fractional positions, and
+integrate its spectrum analytically. This experimental **AFT** is a continuous
+Fourier integral, distinct from the sampled DFT; its current full spectrum takes
+O(N²). The [AFT/FFT benchmark](docs/COMPRESSION.md#angular-fourier-transform-aft-current-benchmark)
+includes measured Beethoven spectra, spectrograms, runtime plots, and a GIF.
+Subdividing a parent circle alone cannot predict unknown error; source-informed child models
+or residual information are required.
+
+```sh
+cargo test --offline --test spectral --test aft
+# Optional: Python + NumPy + Matplotlib + Pillow + FFmpeg.
+python3 tools/aft_compare.py /path/to/music.mp3 /tmp/aft-trial
+# Optional: Python + NumPy + FFmpeg. Output must be new, outside the repository.
+python3 tools/compression_lab.py /path/to/music.mp3 /tmp/compression-trial \
+  --starts 60 180 300 --seconds 1 --tolerances 0 16 128
+```
+
+See the [experiment and format](docs/COMPRESSION.md) for reproduction, results,
+and limitations, and [the roadmap](ROADMAP.md) for further work.
 
 ## Verification and listening experiments
 
