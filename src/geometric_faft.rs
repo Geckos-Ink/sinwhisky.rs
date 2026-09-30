@@ -64,7 +64,8 @@ fn rounded(value: f64, bits: u8) -> f64 {
 pub struct GeometryParams {
     /// Maximum absolute error at each original sample, in input amplitude units.
     pub max_error: f64,
-    /// Maximum dyadic source interval per candidate, 2..=256.
+    /// Maximum support, 2..=256. The DP preset requires a power of two;
+    /// the hierarchical preset also accepts other integer lengths.
     pub max_span: usize,
     /// Try quarter/half/three-quarter fitting points and aperture gains .5/1/2.
     /// false tries the midpoint and gain 1 only, useful as a controlled baseline.
@@ -168,6 +169,36 @@ pub struct GeometryStats {
     pub estimated_model_bits: usize,
 }
 
+/// Source-informed splitting and refitting of adjacent children. Unlike the DP
+/// preset, supports need not have dyadic lengths. Limits bound search work;
+/// unsuccessful leaves still use checked one-interval lines, never zero fill.
+#[derive(Debug, Clone, Copy)]
+pub struct HierarchyParams {
+    pub max_depth: usize,
+    pub min_span: usize,
+    pub merge_passes: usize,
+}
+impl Default for HierarchyParams {
+    fn default() -> Self {
+        Self {
+            max_depth: 12,
+            min_span: 2,
+            merge_passes: 4,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HierarchyStats {
+    pub parents_tested: usize,
+    pub splits: usize,
+    pub depth_limited: usize,
+    pub fallback_intervals: usize,
+    pub initial_segments: usize,
+    pub merges_tested: usize,
+    pub merges_accepted: usize,
+    pub largest_span: usize,
+}
+
 /// Immutable geometric predictor. No source samples, FFT coefficients, or borrowed
 /// Analysis are retained. Segments cover [0,N); the terminal fitting anchor is the
 /// first source sample, explicitly defining a periodic closing interval.
@@ -180,6 +211,206 @@ pub struct GeometryFrame {
     stats: GeometryStats,
 }
 impl GeometryFrame {
+    /// Fit parents over variable supports, refine failures using the source,
+    /// then attempt to replace adjacent children by one refitted circle or line.
+    /// Merging rechecks EVERY source point and terminal anchor. This greedy path
+    /// is a separate preset, not the minimum-count DP candidate-bank optimizer.
+    pub fn hierarchical(
+        samples: &[f64],
+        params: GeometryParams,
+        hierarchy: HierarchyParams,
+    ) -> Result<(Self, HierarchyStats), Error> {
+        if samples.is_empty()
+            || !(2..=256).contains(&params.max_span)
+            || !(4..=53).contains(&params.min_precision)
+            || !params.max_error.is_finite()
+            || params.max_error < 0.0
+            || hierarchy.max_depth > 32
+            || hierarchy.min_span == 0
+            || hierarchy.min_span > params.max_span
+            || hierarchy.merge_passes > 16
+        {
+            return Err(Error::InvalidParameter("hierarchical geometry parameters"));
+        }
+        if let Some(i) = samples.iter().position(|v| !v.is_finite()) {
+            return Err(Error::NonFiniteSample(i));
+        }
+        let n = samples.len();
+        let amplitude = samples
+            .iter()
+            .fold(0.0_f64, |m, v| m.max(v.abs()))
+            .max(f64::MIN_POSITIVE);
+        let mut source = buffer(n.checked_add(1).ok_or(Error::OutputTooLarge)?)?;
+        source.extend(samples.iter().map(|v| v / amplitude));
+        source.push(source[0]);
+        let tolerance = params.max_error / amplitude;
+        let mut widths = buffer(8)?;
+        for b in [params.min_precision, 12, 16, 20, 24, 32, 40, 53] {
+            if b >= params.min_precision && !widths.contains(&b) {
+                widths.push(b);
+            }
+        }
+        widths.sort_unstable();
+        let mut segments = buffer(n)?;
+        let mut stats = HierarchyStats::default();
+        let mut tested = 0;
+        let mut stack = buffer(hierarchy.max_depth + 2)?;
+        for start in (0..n).step_by(params.max_span) {
+            stack.push((start, (start + params.max_span).min(n), 0));
+            while let Some((start, end, depth)) = stack.pop() {
+                stats.parents_tested += 1;
+                if let Some(s) =
+                    fit_candidate(&source, start, end, tolerance, params, &widths, &mut tested)
+                {
+                    segments.push(s);
+                    continue;
+                }
+                if depth == hierarchy.max_depth || end - start <= hierarchy.min_span {
+                    stats.depth_limited += usize::from(depth == hierarchy.max_depth);
+                    for at in start..end {
+                        let s = fit_candidate(
+                            &source,
+                            at,
+                            at + 1,
+                            tolerance,
+                            params,
+                            &widths,
+                            &mut tested,
+                        )
+                        .ok_or(Error::InvalidParameter(
+                            "hierarchical precision cannot meet error",
+                        ))?;
+                        segments.push(s);
+                        stats.fallback_intervals += 1;
+                    }
+                    continue;
+                }
+                // Split at a source-informed large deviation from the parent's
+                // endpoint line, clipped to prevent pathological one-sided trees.
+                let length = end - start;
+                let slope = (source[end] - source[start]) / length as f64;
+                let lo = (length / 4).max(1);
+                let hi = (3 * length / 4).min(length - 1).max(lo);
+                let middle = (lo..=hi)
+                    .max_by(|&a, &b| {
+                        let ea = (source[start + a] - source[start] - slope * a as f64).abs();
+                        let eb = (source[start + b] - source[start] - slope * b as f64).abs();
+                        ea.total_cmp(&eb)
+                    })
+                    .unwrap();
+                stats.splits += 1;
+                stack.push((start + middle, end, depth + 1));
+                stack.push((start, start + middle, depth + 1));
+            }
+        }
+        stats.initial_segments = segments.len();
+        for _ in 0..hierarchy.merge_passes {
+            let mut merged = buffer(segments.len())?;
+            let mut at = 0;
+            let before = stats.merges_accepted;
+            while at < segments.len() {
+                if at + 1 < segments.len()
+                    && segments[at + 1].range.end - segments[at].range.start <= params.max_span
+                {
+                    stats.merges_tested += 1;
+                    if let Some(s) = fit_candidate(
+                        &source,
+                        segments[at].range.start,
+                        segments[at + 1].range.end,
+                        tolerance,
+                        params,
+                        &widths,
+                        &mut tested,
+                    ) {
+                        merged.push(s);
+                        stats.merges_accepted += 1;
+                        at += 2;
+                        continue;
+                    }
+                }
+                merged.push(segments[at].clone());
+                at += 1;
+            }
+            segments = merged;
+            if before == stats.merges_accepted {
+                break;
+            }
+        }
+        stats.largest_span = segments.iter().map(|s| s.range.len()).max().unwrap_or(0);
+        Ok((
+            Self::from_segments(samples, amplitude, segments, tested, params.max_error)?,
+            stats,
+        ))
+    }
+
+    /// Crop once, then reuse prepared finite sums at arbitrary frequencies. Zoom
+    /// samples the same retained geometry; Hann weights apply AFTER fitting.
+    /// Preparation computes exact sample-domain amplitude and centered-moment
+    /// bounds with O(window length * zoom) arithmetic; each query is O(pieces).
+    pub fn prepare_spectrum(
+        &self,
+        window: Range<usize>,
+        zoom: usize,
+        hann: bool,
+    ) -> Result<GeometricSpectrum, Error> {
+        self.validate_zoom(zoom)?;
+        if window.start >= window.end || window.end > self.len {
+            return Err(Error::InvalidParameter("prepared geometric window"));
+        }
+        let mut pieces = buffer(self.pieces.len())?;
+        for &piece in &self.pieces {
+            let start = piece.start.max(window.start);
+            let end = (piece.start + piece.len).min(window.end);
+            if start < end {
+                let mut p = piece.shifted(start - piece.start, end - start).zoomed(zoom);
+                p.start = (start - window.start) * zoom;
+                pieces.push(p);
+            }
+        }
+        let mut result = GeometricSpectrum {
+            pieces,
+            scale: self.scale,
+            window,
+            zoom,
+            hann,
+            lipschitz: 0.0,
+            amplitude_bound: 0.0,
+            rotations: Vec::new(),
+        };
+        result.rotations = buffer(result.pieces.len())?;
+        for &p in &result.pieces {
+            let beta = match p.kind {
+                PieceKind::Arc { beta, .. } => beta,
+                _ => 0.0,
+            };
+            result.rotations.push(PreparedRotation {
+                piece: p,
+                roots: [phase(beta), phase(-beta)],
+                powers: [phase(beta * p.len as f64), phase(-beta * p.len as f64)],
+            });
+        }
+        let center = (result.sample_count() - 1) as f64 / (2.0 * zoom as f64);
+        for p in &result.pieces {
+            for j in 0..p.len {
+                let at = p.start + j;
+                let v = (p.value(j as f64) * result.scale).abs() * result.weight(at)
+                    / result.normalization();
+                result.amplitude_bound += v;
+                result.lipschitz += v * (at as f64 / zoom as f64 - center).abs();
+            }
+        }
+        if !result.lipschitz.is_finite() || !result.amplitude_bound.is_finite() {
+            return Err(Error::InvalidParameter(
+                "prepared geometric bounds overflow",
+            ));
+        }
+        // Small outward cushion for floating accumulation, not a proof against
+        // every platform's transcendental rounding behavior.
+        result.lipschitz *= 1.0 + 1e-12;
+        result.amplitude_bound *= 1.0 + 1e-12;
+        Ok(result)
+    }
+
     pub fn new(samples: &[f64], params: GeometryParams) -> Result<Self, Error> {
         let n = samples.len();
         if n == 0
@@ -220,120 +451,8 @@ impl GeometryFrame {
             let mut length = 1;
             while length <= params.max_span && length <= n - start {
                 let end = start + length;
-                let mut best: Option<WaveSegment> = None;
-                for &bits in &widths {
-                    let line = WaveSegment {
-                        range: start..end,
-                        primitive: WavePrimitive::Line {
-                            first: rounded(source[start], bits),
-                            last: rounded(source[end], bits),
-                            precision: bits,
-                        },
-                    };
-                    tested += 1;
-                    if valid(&line, &source[start..=end], tolerance) {
-                        best = Some(line);
-                        break;
-                    }
-                }
-                let cheapest_circle_bits = 25 + 7 * (11 + params.min_precision as usize);
-                if length >= 2
-                    && best
-                        .as_ref()
-                        .is_none_or(|b| b.model_bits() > cheapest_circle_bits)
-                {
-                    let mids = if params.search_phases {
-                        [length / 4, length / 2, 3 * length / 4]
-                    } else {
-                        [length / 2; 3]
-                    };
-                    let gains = if params.search_phases {
-                        [0.5, 1.0, 2.0]
-                    } else {
-                        [1.0; 3]
-                    };
-                    for (mi, &middle) in mids.iter().enumerate() {
-                        if middle == 0 || middle >= length || mids[..mi].contains(&middle) {
-                            continue;
-                        }
-                        for (gi, &gain) in gains.iter().enumerate() {
-                            if gains[..gi].contains(&gain) {
-                                continue;
-                            }
-                            let y = [source[start], source[start + middle], source[end]];
-                            let range = (y[0] - y[1])
-                                .abs()
-                                .max((y[1] - y[2]).abs())
-                                .max((y[0] - y[2]).abs());
-                            let x_scale = 2.0 * range.max(1e-12) * gain / length as f64;
-                            let points = [
-                                Point { x: 0.0, y: y[0] },
-                                Point {
-                                    x: middle as f64 * x_scale,
-                                    y: y[1],
-                                },
-                                Point {
-                                    x: length as f64 * x_scale,
-                                    y: y[2],
-                                },
-                            ];
-                            let Some(circle) = Circle::through(points, 1e-18) else {
-                                continue;
-                            };
-                            // Extremely flat circles are better represented by a line.
-                            if circle.radius > 1e6 {
-                                continue;
-                            }
-                            let angles = arc_angles(circle, points);
-                            if params.prevalidate_geometry {
-                                let nominal = WaveSegment {
-                                    range: start..end,
-                                    primitive: WavePrimitive::Circle(WaveCircle {
-                                        center: circle.center,
-                                        radius: circle.radius,
-                                        x_scale,
-                                        angles,
-                                        middle,
-                                        precision: 53,
-                                        aperture_gain: gain,
-                                    }),
-                                };
-                                tested += 1;
-                                if !valid(&nominal, &source[start..=end], tolerance) {
-                                    continue;
-                                }
-                            }
-                            for &bits in &widths {
-                                let c = WaveCircle {
-                                    center: Point {
-                                        x: rounded(circle.center.x, bits),
-                                        y: rounded(circle.center.y, bits),
-                                    },
-                                    radius: rounded(circle.radius, bits),
-                                    x_scale: rounded(x_scale, bits),
-                                    angles: angles.map(|a| rounded(a, bits)),
-                                    middle,
-                                    precision: bits,
-                                    aperture_gain: gain,
-                                };
-                                let segment = WaveSegment {
-                                    range: start..end,
-                                    primitive: WavePrimitive::Circle(c),
-                                };
-                                tested += 1;
-                                if valid(&segment, &source[start..=end], tolerance) {
-                                    if best
-                                        .as_ref()
-                                        .is_none_or(|b| segment.model_bits() < b.model_bits())
-                                    {
-                                        best = Some(segment);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+                let best =
+                    fit_candidate(&source, start, end, tolerance, params, &widths, &mut tested);
                 if let Some(segment) = best {
                     let next = (
                         costs[end].0.saturating_add(1),
@@ -356,10 +475,19 @@ impl GeometryFrame {
             at = segment.range.end;
             segments.push(segment);
         }
+        Self::from_segments(samples, amplitude, segments, tested, params.max_error)
+    }
+    fn from_segments(
+        samples: &[f64],
+        amplitude: f64,
+        segments: Vec<WaveSegment>,
+        tested: usize,
+        max_error: f64,
+    ) -> Result<Self, Error> {
         let mut pieces = buffer(segments.len().checked_mul(2).ok_or(Error::OutputTooLarge)?)?;
         let mut stats = GeometryStats {
             candidates_tested: tested,
-            estimated_model_bits: 96 + costs[0].1,
+            estimated_model_bits: 96 + segments.iter().map(WaveSegment::model_bits).sum::<usize>(),
             ..GeometryStats::default()
         };
         for segment in &segments {
@@ -401,7 +529,7 @@ impl GeometryFrame {
         }
         stats.angular_pieces = pieces.len();
         let mut frame = Self {
-            len: n,
+            len: samples.len(),
             scale: amplitude,
             segments,
             pieces,
@@ -413,13 +541,13 @@ impl GeometryFrame {
         for (&a, &b) in samples.iter().zip(&decoded) {
             let e = (a - b).abs();
             max = max.max(e);
-            rms = rms.hypot(e / (n as f64).sqrt());
+            rms = rms.hypot(e / (samples.len() as f64).sqrt());
         }
         frame.stats.max_error = max;
         frame.stats.rmse = rms;
         if !frame.stats.max_error.is_finite()
             || !frame.stats.rmse.is_finite()
-            || frame.stats.max_error > params.max_error
+            || frame.stats.max_error > max_error
         {
             return Err(Error::InvalidParameter(
                 "geometric rescaled error exceeds budget",
@@ -685,6 +813,272 @@ fn valid(segment: &WaveSegment, source: &[f64], tolerance: f64) -> bool {
         }
     }
 }
+
+/// One independently centered rotation, or a zero-curvature line. In normalized
+/// coordinates y(j)=constant+sine*sin(rate*j)+cosine*cos(rate*j)+slope*j.
+/// Starts/lengths use the prepared zoom grid; rate is radians per grid sample.
+/// Finite support and its global phase are essential to the inverse spectral sum.
+#[derive(Debug, Clone, Copy)]
+pub struct RotationComponent {
+    pub start: usize,
+    pub length: usize,
+    pub constant: f64,
+    pub sine: f64,
+    pub cosine: f64,
+    pub rate: f64,
+    pub slope: f64,
+}
+
+/// Immutable finite-window spectral oracle. Values are normalized by grid length
+/// (half that length for periodic Hann). Thus a well-isolated real unit sine has
+/// approximately 0.5 magnitude; these are complex coefficients, not PSD estimates.
+#[derive(Debug, Clone)]
+pub struct GeometricSpectrum {
+    pieces: Vec<Piece>,
+    scale: f64,
+    window: Range<usize>,
+    zoom: usize,
+    hann: bool,
+    lipschitz: f64,
+    amplitude_bound: f64,
+    rotations: Vec<PreparedRotation>,
+}
+#[derive(Debug, Clone, Copy)]
+struct PreparedRotation {
+    piece: Piece,
+    roots: [Complex; 2],
+    powers: [Complex; 2],
+}
+fn power(mut base: Complex, mut exponent: usize) -> Complex {
+    let mut out = Complex { re: 1.0, im: 0.0 };
+    while exponent > 0 {
+        if exponent & 1 != 0 {
+            out = mul(out, base);
+        }
+        exponent >>= 1;
+        if exponent > 0 {
+            base = mul(base, base);
+        }
+    }
+    out
+}
+fn ratio_sum(q: Complex, qn: Complex, delta: f64, n: usize) -> Complex {
+    let den = Complex {
+        re: 1.0 - q.re,
+        im: -q.im,
+    };
+    let norm = den.re * den.re + den.im * den.im;
+    if norm < 1e-8 {
+        return geometric_sum(delta, n);
+    }
+    let num = Complex {
+        re: 1.0 - qn.re,
+        im: -qn.im,
+    };
+    Complex {
+        re: (num.re * den.re + num.im * den.im) / norm,
+        im: (num.im * den.re - num.re * den.im) / norm,
+    }
+}
+impl GeometricSpectrum {
+    pub fn sample_count(&self) -> usize {
+        self.window.len() * self.zoom
+    }
+    pub fn source_range(&self) -> Range<usize> {
+        self.window.clone()
+    }
+    pub fn zoom(&self) -> usize {
+        self.zoom
+    }
+    pub fn scale(&self) -> f64 {
+        self.scale
+    }
+    pub fn hann(&self) -> bool {
+        self.hann
+    }
+    pub fn lipschitz_bound(&self) -> f64 {
+        self.lipschitz
+    }
+    pub fn amplitude_bound(&self) -> f64 {
+        self.amplitude_bound
+    }
+    fn normalization(&self) -> f64 {
+        self.sample_count() as f64 * if self.hann { 0.5 } else { 1.0 }
+    }
+    fn weight(&self, at: usize) -> f64 {
+        if self.hann {
+            0.5 - 0.5 * (TAU * at as f64 / self.sample_count() as f64).cos()
+        } else {
+            1.0
+        }
+    }
+    fn unweighted(&self, omega: f64) -> Complex {
+        let w = omega / self.zoom as f64;
+        let mut sum = Complex::default();
+        let mut correction = Complex::default();
+        for &p in &self.pieces {
+            compensated(
+                &mut sum,
+                &mut correction,
+                mul(p.sum(w), phase(-w * p.start as f64)),
+            );
+        }
+        scale(sum, self.scale / self.normalization())
+    }
+    /// Arbitrary radians per ORIGINAL sample, not an FFT-bin index. No integration,
+    /// matrix inversion, PCM allocation or FFT. Stable finite-series limits remain.
+    pub fn value(&self, omega: f64) -> Result<Complex, Error> {
+        if !omega.is_finite() {
+            return Err(Error::InvalidParameter("prepared frequency"));
+        }
+        let center = self.unweighted(omega);
+        if !self.hann {
+            return checked(center);
+        }
+        let shift = TAU / self.window.len() as f64;
+        checked(sub(
+            scale(center, 0.5),
+            scale(
+                add(
+                    self.unweighted(omega - shift),
+                    self.unweighted(omega + shift),
+                ),
+                0.25,
+            ),
+        ))
+    }
+    fn rotated_sum(&self, omega: f64) -> Complex {
+        let w = (omega / self.zoom as f64 + PI).rem_euclid(TAU) - PI;
+        let q = phase(-w);
+        let mut sum = Complex::default();
+        let mut correction = Complex::default();
+        let mut support = Complex { re: 1.0, im: 0.0 };
+        for (index, r) in self.rotations.iter().enumerate() {
+            let p = r.piece;
+            if index % 64 == 0 {
+                support = power(q, p.start);
+            }
+            let qn = power(q, p.len);
+            let value = if p.len == 1 {
+                Complex {
+                    re: p.value(0.0),
+                    im: 0.0,
+                }
+            } else {
+                let g0 = ratio_sum(q, qn, -w, p.len);
+                match p.kind {
+                    PieceKind::Arc {
+                        first,
+                        sine,
+                        cosine,
+                        beta,
+                    } => arc_sum(
+                        first,
+                        sine,
+                        cosine,
+                        [
+                            g0,
+                            ratio_sum(mul(q, r.roots[0]), mul(qn, r.powers[0]), beta - w, p.len),
+                            ratio_sum(mul(q, r.roots[1]), mul(qn, r.powers[1]), -beta - w, p.len),
+                        ],
+                    ),
+                    PieceKind::Line { first, slope } => {
+                        let den = Complex {
+                            re: 1.0 - q.re,
+                            im: -q.im,
+                        };
+                        let norm = den.re * den.re + den.im * den.im;
+                        let moment = if norm < 1e-6 || (w * p.len as f64).abs() < 0.02 {
+                            first_moment(-w, p.len)
+                        } else {
+                            let num = sub(mul(q, g0), scale(qn, p.len as f64));
+                            Complex {
+                                re: (num.re * den.re + num.im * den.im) / norm,
+                                im: (num.im * den.re - num.re * den.im) / norm,
+                            }
+                        };
+                        add(scale(g0, first), scale(moment, slope))
+                    }
+                }
+            };
+            compensated(&mut sum, &mut correction, mul(value, support));
+            support = mul(support, qn);
+        }
+        scale(sum, self.scale / self.normalization())
+    }
+    /// Arithmetic rotation kernel: prepare each circle's angular roots once, then
+    /// use integer powers, products and ratios. One sin/cos pair per rectangular
+    /// query (three for Hann), with stable trigonometric resonance fallbacks.
+    pub fn value_rotations(&self, omega: f64) -> Result<Complex, Error> {
+        if !omega.is_finite() {
+            return Err(Error::InvalidParameter("prepared frequency"));
+        }
+        let center = self.rotated_sum(omega);
+        if !self.hann {
+            return checked(center);
+        }
+        let shift = TAU / self.window.len() as f64;
+        checked(sub(
+            scale(center, 0.5),
+            scale(
+                add(
+                    self.rotated_sum(omega - shift),
+                    self.rotated_sum(omega + shift),
+                ),
+                0.25,
+            ),
+        ))
+    }
+    pub fn rotations(&self) -> impl Iterator<Item = RotationComponent> + '_ {
+        self.pieces.iter().map(|p| {
+            let (constant, sine, cosine, rate, slope) = match p.kind {
+                PieceKind::Line { first, slope } => (first, 0.0, 0.0, 0.0, slope),
+                PieceKind::Arc {
+                    first,
+                    sine,
+                    cosine,
+                    beta,
+                } => (first - sine, cosine, sine, beta, 0.0),
+            };
+            RotationComponent {
+                start: p.start,
+                length: p.len,
+                constant,
+                sine,
+                cosine,
+                rate,
+                slope,
+            }
+        })
+    }
+    /// Exact weighted L1 disagreement on the shared zoom grid bounds EVERY complex
+    /// spectral difference. This compares two predictors, not either with unknown
+    /// intersample truth. O(samples) preparation, no frequency search or source PCM.
+    pub fn difference_bound(&self, other: &Self) -> Result<f64, Error> {
+        if self.window != other.window || self.zoom != other.zoom || self.hann != other.hann {
+            return Err(Error::InvalidParameter("spectral predictor grids differ"));
+        }
+        let mut a = 0;
+        let mut b = 0;
+        let mut bound = 0.0;
+        for at in 0..self.sample_count() {
+            while at >= self.pieces[a].start + self.pieces[a].len {
+                a += 1;
+            }
+            while at >= other.pieces[b].start + other.pieces[b].len {
+                b += 1;
+            }
+            let va = self.pieces[a].value((at - self.pieces[a].start) as f64) * self.scale;
+            let vb = other.pieces[b].value((at - other.pieces[b].start) as f64) * other.scale;
+            bound += (va - vb).abs() * self.weight(at) / self.normalization();
+        }
+        if bound.is_finite() {
+            Ok(bound * (1.0 + 1e-12) + self.amplitude_bound * 1e-12)
+        } else {
+            Err(Error::InvalidParameter("spectral difference overflow"))
+        }
+    }
+}
 fn compensated(total: &mut Complex, correction: &mut Complex, value: Complex) {
     let y = sub(value, *correction);
     let next = add(*total, y);
@@ -857,4 +1251,131 @@ fn first_moment(delta: f64, n: usize) -> Complex {
             im: -derivative,
         },
     )
+}
+
+fn fit_candidate(
+    source: &[f64],
+    start: usize,
+    end: usize,
+    tolerance: f64,
+    params: GeometryParams,
+    widths: &[u8],
+    tested: &mut usize,
+) -> Option<WaveSegment> {
+    let length = end - start;
+    let mut best: Option<WaveSegment> = None;
+    for &bits in widths {
+        let line = WaveSegment {
+            range: start..end,
+            primitive: WavePrimitive::Line {
+                first: rounded(source[start], bits),
+                last: rounded(source[end], bits),
+                precision: bits,
+            },
+        };
+        *tested += 1;
+        if valid(&line, &source[start..=end], tolerance) {
+            best = Some(line);
+            break;
+        }
+    }
+    let cheapest_circle_bits = 25 + 7 * (11 + params.min_precision as usize);
+    if length >= 2
+        && best
+            .as_ref()
+            .is_none_or(|b| b.model_bits() > cheapest_circle_bits)
+    {
+        let mids = if params.search_phases {
+            [length / 4, length / 2, 3 * length / 4]
+        } else {
+            [length / 2; 3]
+        };
+        let gains = if params.search_phases {
+            [0.5, 1.0, 2.0]
+        } else {
+            [1.0; 3]
+        };
+        for (mi, &middle) in mids.iter().enumerate() {
+            if middle == 0 || middle >= length || mids[..mi].contains(&middle) {
+                continue;
+            }
+            for (gi, &gain) in gains.iter().enumerate() {
+                if gains[..gi].contains(&gain) {
+                    continue;
+                }
+                let y = [source[start], source[start + middle], source[end]];
+                let range = (y[0] - y[1])
+                    .abs()
+                    .max((y[1] - y[2]).abs())
+                    .max((y[0] - y[2]).abs());
+                let x_scale = 2.0 * range.max(1e-12) * gain / length as f64;
+                let points = [
+                    Point { x: 0.0, y: y[0] },
+                    Point {
+                        x: middle as f64 * x_scale,
+                        y: y[1],
+                    },
+                    Point {
+                        x: length as f64 * x_scale,
+                        y: y[2],
+                    },
+                ];
+                let Some(circle) = Circle::through(points, 1e-18) else {
+                    continue;
+                };
+                // Extremely flat circles are better represented by a line.
+                if circle.radius > 1e6 {
+                    continue;
+                }
+                let angles = arc_angles(circle, points);
+                if params.prevalidate_geometry {
+                    let nominal = WaveSegment {
+                        range: start..end,
+                        primitive: WavePrimitive::Circle(WaveCircle {
+                            center: circle.center,
+                            radius: circle.radius,
+                            x_scale,
+                            angles,
+                            middle,
+                            precision: 53,
+                            aperture_gain: gain,
+                        }),
+                    };
+                    *tested += 1;
+                    if !valid(&nominal, &source[start..=end], tolerance) {
+                        continue;
+                    }
+                }
+                for &bits in widths {
+                    let c = WaveCircle {
+                        center: Point {
+                            x: rounded(circle.center.x, bits),
+                            y: rounded(circle.center.y, bits),
+                        },
+                        radius: rounded(circle.radius, bits),
+                        x_scale: rounded(x_scale, bits),
+                        angles: angles.map(|a| rounded(a, bits)),
+                        middle,
+                        precision: bits,
+                        aperture_gain: gain,
+                    };
+                    let segment = WaveSegment {
+                        range: start..end,
+                        primitive: WavePrimitive::Circle(c),
+                    };
+                    *tested += 1;
+                    if valid(&segment, &source[start..=end], tolerance) {
+                        if best
+                            .as_ref()
+                            .is_none_or(|b| segment.model_bits() < b.model_bits())
+                        {
+                            best = Some(segment);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    best
 }

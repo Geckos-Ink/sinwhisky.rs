@@ -32,17 +32,29 @@
   attempts, independent spectrum checks, omitted-point diagnostics, 80/160 kbps
   MP3 controls, plots, and an animation of an actual waveform circle.
 
+- Hierarchical source-informed circles on arbitrary integer supports, checked
+  child merging/refitting, and finite inverse rotational sums with prepared roots.
+- Adaptive relevant-frequency peaks with depth/width/query limits, uncertainty
+  bounds for coarse/fine predictors, reported heuristic pruning, and peak merging.
+- 21-window Beethoven hierarchy/adaptive survey with two retrieval kernels,
+  off-bin and unresolved near-tone controls, precision/depth/zoom trials, plots/GIF.
+
 ## Current focus: geometry-first FAFT
 
 1. Prune point/phase candidates using justified prediction bounds; fitting is now
    the dominant cost. Measure reuse across neighboring time windows.
-2. Study shared circle parameters, parent/child deltas and residual circles.
-   Current source-informed supports replace one another on a coverage path.
+2. Improve greedy hierarchical splitting/merging with shared circle parameters,
+   source-checked parent/child deltas, residual circles, and reusable model banks.
+   Variable supports and checked adjacent refitting now exist; no global optimum
+   is established.
 3. Define an objective that also constrains spectral phase/band errors: a source
    sample-error limit alone allows changes in quiet spectral bins.
-4. Compare selected-frequency/window queries with matched FFT/Goertzel methods,
-   group compatible angular rates, and track recurrence conditioning and cost.
-   Current whole-grid geometric work is O(PK), not a universal FFT acceleration.
+4. Reduce adaptive-search oracle cost and misses; compare selected-frequency
+   queries with matched FFT/Goertzel methods, group compatible angular rates, and
+   tighten pruning bounds. The prepared arithmetic kernel improves cost, but
+   padded FFT remains faster in the current survey. Flatness pruning is heuristic;
+   the bound-only control exhausts its budget. Coarse prediction sometimes saves
+   no work when its disagreement bound exceeds the relevance floor.
 5. Test adaptive per-field precision, a bounded wire format with measured bytes,
    continuity/overlap, broader audio, and prediction from truly omitted points.
 6. Keep the integral AFT and FFT-based phasor control as references. Their model

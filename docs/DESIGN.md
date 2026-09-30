@@ -214,6 +214,63 @@ certain source time are finite-window queries, not an intrinsic single-sample
 frequency decomposition. The FFT-based control and integral AFT reference remain
 available with their earlier public contracts.
 
+## Hierarchical geometry and adaptive frequencies
+
+`GeometryFrame::hierarchical` is a separate greedy preset. Parent supports can
+have any integer length up to the configured cap (2..256). A failed fit splits
+at a large source deviation from the endpoint line, clipped to the central half
+of the support. Children fit original source points, never the parent's predicted
+samples. At the hierarchy depth or minimum-span limit, checked one-interval lines
+preserve coverage and the source error contract. Adjacent children can be refitted
+into one model over their combined support; every source sample and the terminal
+anchor are rechecked. Up to the requested number of merge passes are attempted.
+Merging can cross earlier split/root boundaries. Statistics distinguish splitting,
+fallback, attempted merges, accepted merges, and the initial descriptor count.
+This search has no global minimal-circle claim and retains no source samples.
+
+`GeometricSpectrum` crops the immutable predictor once, compiles rotations, and
+computes amplitude/centered derivative bounds on the requested sampling grid.
+Preparation is O(window length * zoom); queries use finite geometric series and
+line first moments. `value` retains the closed-sum reference, while
+`value_rotations` uses prepared angular roots, integer powers, complex products,
+and ratios. It requires one new sin/cos pair per rectangular query, three for
+Hann, plus stable near-resonance fallbacks. It is not a purely addition/multiply
+algorithm. Values use radians per original source sample and normalization by
+grid length (half the grid length for periodic Hann); a unit real sinusoid has
+approximately 0.5 coefficient magnitude. Prepared `rotations()` exposes finite
+supports, local centers, sine/cosine projections, rates and line slopes.
+
+`AdaptiveSpectrum::search` uses an initial cover, strongest-first midpoint
+refinement, then bounded ternary refinement of observed peak brackets. Output
+frequencies are arbitrary floating values, not a fixed FFT-bin count. Interval
+depth and peak refinement iterations each use `max_depth`; their combined work
+also obeys a hard oracle-call budget. Width and peak-merging limits are separate.
+Strongest-first merging suppresses nearby candidates without transitive merging
+across an indefinitely long chain. The relative relevance floor uses an observed
+peak lower bound, with an optional absolute floor. It is not a psychoacoustic
+relevance metric. DC and upper-band edge candidates are included.
+
+An optional coarse predictor is prepared on the SAME time range, zoom grid and
+weights as the target. A streaming weighted L1 difference bounds their complex
+spectral discrepancy at every frequency. A below-floor coarse probe can skip its
+fine query; retained probes include that uncertainty. Different model tolerances
+and precisions are allowed; different query grids/weights are rejected. Higher
+zoom compares more points of the retained function, with no source intersample
+error guarantee. Small rounding cushions are used for bounds, not an interval
+arithmetic proof on every platform. The library rejects nonfinite bounds.
+
+Bands expose their stop reason and a predictor-magnitude upper bound. `BelowFloor`
+uses the centered derivative bound; `LowGain` uses sampled-quiet or flat behavior
+as a deliberate heuristic and may miss a narrow peak between probes. `Depth`, `Width`, and `Budget` expose remaining
+resolution/work limits. Disabling flatness pruning does not imply completion if
+the budget or depth is exhausted. Peak brackets are neighboring sampled
+frequencies, not confidence intervals. The finite-window spectrum is continuous
+in frequency, but fine query spacing is distinct from resolving multiple source
+oscillators or identifying a unique inverse rotating chain. The
+[measured experiment](COMPRESSION.md#hierarchical-circles-and-adaptive-relevant-frequencies)
+compares matched padded FFTs, repeated attempts, precision/depth/zoom controls,
+and unresolved close tones without claiming an FFT speed advantage.
+
 ## Scope boundaries
 
 Fast Linear Transform (FLT) is a separate calibration/equalization idea.

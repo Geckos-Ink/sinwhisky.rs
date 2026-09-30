@@ -1,8 +1,277 @@
 # Angular Fourier and circle compression experiments
 
-The current focus is FAFT from circles fitted through waveform points. The direct
-geometry method below precedes the earlier FFT-based control, integral reference
-preset, and compression experiment.
+The current focus is hierarchical circle fitting and adaptive relevant-frequency
+retrieval from waveform geometry. This extension precedes the dyadic geometry
+control, the earlier FFT-based control, integral reference preset, and compression
+experiment.
+
+## Hierarchical circles and adaptive relevant frequencies
+
+The current extension adds **source-informed children, variable sample supports,
+checked circle merging, and a variable list of relevant frequencies**. The older
+DP geometry bank below remains an independent control. The pipeline is:
+
+```text
+original samples → try a parent waveform circle over a variable range
+                 → failed parent: source-informed child fits
+                 → adjacent children: refit + check a merged circle
+                 → compiled, independently centered rotations
+                 → arbitrary-frequency finite sums
+                 → bounded relevance/depth/width search + nearby peak merging
+```
+
+[src/geometric_faft.rs](../src/geometric_faft.rs) implements
+`GeometryFrame::hierarchical`, `HierarchyParams`/`HierarchyStats`, and prepared
+`GeometricSpectrum` queries. [src/adaptive_faft.rs](../src/adaptive_faft.rs) owns
+`FrequencyParams`, `AdaptiveSpectrum`, points, peaks, bands, uncertainties and
+stop reasons. Neither module uses an FFT or a Fourier integral.
+
+### Variable source ranges and child merging
+
+The new hierarchy accepts any integer `max_span` in 2..256, including nonpowers
+of two. It first tries a parent over a complete support, searching the existing
+interior-point, aperture and precision bank. Three points define the candidate's
+circle, while **every sample in its support** and its terminal anchor determine
+whether that circle is acceptable. The support is not restricted to three
+consecutive samples or one encoded bitrate. A circle can cover different numbers
+of source samples and use its own geometry precision.
+
+A failed parent splits at a large source deviation from its endpoint line, clipped
+to the central half of the support. Children are fitted against original samples,
+not synthesized parent points. At `max_depth` or `min_span`, checked source-pair
+lines preserve coverage. No unresolved region silently becomes zero. Adjacent
+children then compete with one refitted model over their combined support.
+A merge is accepted only when its circle/line satisfies the same source and anchor
+checks, including rounded parameters. Merge passes can cross earlier root/split
+boundaries and are capped separately (0..16). Accepted merges remove one descriptor
+each. Lines remain finite zero-curvature limits, without storing infinity.
+
+This is a greedy split/refit preset, not a global optimum. The original dyadic DP
+preset retains its own shortest-path contract. Children replace parent supports;
+they are not additive residual oscillators. Final source maximum/RMS errors are
+remeasured in original amplitude units. The model retains no original PCM.
+
+### Inverting the projected rotations
+
+A prepared angular half or line, on a support starting at s and containing L
+grid samples, can be written as
+
+\[
+y_{s+j}=c+A\sin(\beta j)+B\cos(\beta j)+d j,
+\qquad 0\leq j<L.
+\]
+
+For a circle starting at angle theta, `c=cy`, `A=r*cos(theta)`,
+`B=r*sin(theta)`, and `d=0`. For a line, `A=B=0` and d is its finite slope.
+Each circle's center belongs to its local scaled coordinates. Horizontal center
+and aperture determine the fitting angles; time start s supplies the global
+spectral phase. Two halves of one circle can have different beta. These local
+angular rates are not automatically the source sound's physical frequencies.
+
+Let `G(delta,L)=sum(exp(i*delta*j))` and
+`H(delta,L)=sum(j*exp(i*delta*j))` over j=0..L-1. The inverse direction from the
+retained projected geometry to its finite spectrum is
+
+\[
+Y_s(\omega)=e^{-i\omega s}\left[
+cG(-\omega,L)
++\frac{A}{2i}\{G(\beta-\omega,L)-G(-\beta-\omega,L)\}
++\frac{B}{2}\{G(\beta-\omega,L)+G(-\beta-\omega,L)\}
++dH(-\omega,L)\right].
+\]
+
+Sum the independently centered supports with their phases. Centers do not need
+to coincide: the constant term, support and phase already account for the shifts.
+This retrieves the sampled predictor's spectrum without solving a matrix or
+integrating arcs. Finite support matters: even a local constant has energy away
+from DC. It is not a unique recovery of a physical additive rotating chain.
+
+`value` keeps the stable closed-sum reference. The faster `value_rotations`
+prepares each circle's `exp(±i*beta)` and `exp(±i*beta*L)` once. For each requested
+frequency it computes a shared rotation root and updates support powers with
+integer exponentiation, products and ratios. DC/resonance limits and near-DC line
+moments use stable fallbacks; support phases reanchor every 64 pieces. Thus most
+per-circle retrieval uses algorithmic arithmetic. New frequencies still require
+one sin/cos pair for a rectangular query, three for periodic Hann, plus fallback
+trigonometry. It is not a purely arithmetic transform or an asymptotic FFT claim.
+
+Prepared queries use radians per **original** sample, including when zoomed.
+Coefficients are normalized by the sampled grid length, or half that length for
+periodic Hann. A unit real sine has approximately 0.5 coefficient magnitude.
+Hann weights apply after fitting, so this benchmark differs from the preceding
+survey that fitted already-windowed samples. Preparation computes amplitude and
+centered first-moment bounds with O(N*zoom) work. Each finite-sum query is O(P)
+for P retained angular/line pieces; Q arbitrary queries cost O(PQ).
+
+### Continuous query frequencies, bounded search, and coarse precision
+
+The finite-window DTFT is a function of arbitrary real frequency. The API returns
+relevant peak locations instead of a fixed `N/2+1` output grid. An initial interval
+cover seeds a strongest-first midpoint search, followed by bounded ternary
+refinement of observed peak brackets. Midpoint/ternary updates use arithmetic
+comparisons; the prepared circle oracle supplies complex spectral values.
+
+`FrequencyParams` separates:
+
+- Initial interval count and search range within the original Nyquist band.
+- `max_depth` for interval subdivision and, separately, peak-refinement iterations.
+- A hard combined coarse + fine `max_evaluations` budget (3..1,000,000).
+- `min_width`, so indistinguishably nearby query frequencies stop refining.
+- Absolute and relative relevance floors; the latter uses an observed peak lower
+  bound, not a psychoacoustic audibility estimate.
+- `merge_width`, which keeps the strongest nearby peak and counts suppressed
+  candidates. Strongest-first merging avoids a transitive chain that could merge
+  far-separated peaks.
+- Optional sampled-quiet/flat pruning and its relative-gain threshold.
+
+Every terminal band reports `BelowFloor`, `LowGain`, `Width`, `Depth`, or `Budget`,
+with a predictor-magnitude upper bound. Below-floor pruning uses a centered
+absolute first-moment bound: changing frequency by delta can change magnitude by
+at most that moment times `abs(delta)`. The **LowGain rule is heuristic**: a quiet
+or flat sampled interval can hide a narrow peak between probes. Depth/budget/width
+stops and sampled peak brackets are explicit limitations, not completeness or
+statistical confidence claims. Disabling heuristic pruning retains the limits.
+
+An optional less precise circle model uses the same time range, sample grid,
+zoom, and weights as the target. The measured weighted L1 difference between
+those two predictors bounds their complex spectral difference at every frequency.
+A coarse probe whose upper magnitude is below relevance can skip the fine query;
+its uncertainty is retained. Preparation compares predicted grid samples, never
+unknown source points. Zoom 1/2/4/8 tests sample the same fitted functions more
+densely. A finer grid can compare model behavior but cannot supply more measured
+information or guarantee unobserved intersample truth.
+
+Arbitrary frequency-query precision is distinct from resolving close source
+frequencies. FFT spectra can also be sampled more densely through zero padding;
+this experiment compares that control directly. Frequency uncertainty still
+depends on observation duration, noise, model error and any additional signal
+assumptions. See the primary [SciPy spectral-analysis discussion](https://docs.scipy.org/doc/scipy/tutorial/signal.html#spectral-analysis)
+for continuous spectra, window effects and FFT oversampling. No frequency
+resolution independent of the recording's information is claimed here.
+
+### Measured Beethoven hierarchy/adaptive benchmark
+
+The [aggregate snapshot](experiments/adaptive-faft-beethoven-20260930.json) contains
+21 measured windows: seven evenly spaced 1,024-sample raw mono PCM16 windows from
+each two-second excerpt starting at 60, 180 and 300 seconds, at 44.1 kHz. Hierarchy
+support is capped at 128; source peak tolerance is 16, minimum precision 12 bits,
+with four merge passes. The coarse control uses tolerance 128 and minimum 8 bits.
+Search seeds N/4 intervals, uses a 2% relevance floor, depth 12, 8,192 combined
+oracle calls, minimum width 1/1,024 of a source FFT bin, and merge width half a bin.
+Reported timing medians use three warmed in-process repetitions. Fitting,
+preparation and queries are separate; audio decoding, text/JSON and plots are
+excluded. Source FFT timing also excludes Hann preparation.
+
+| Excerpt | Before merging | After merging | Dyadic DP control | Hierarchy fit | DP fit | Source peak error |
+|---|---:|---:|---:|---:|---:|---:|
+| 60 s | 188.14 | 139.00 | 127.57 | 1.375 ms | 10.639 ms | 15.967 |
+| 180 s | 98.57 | 77.43 | 80.14 | 0.880 ms | 10.117 ms | 15.983 |
+| 300 s | 419.86 | 287.43 | 273.14 | 2.822 ms | 9.754 ms | 15.982 |
+
+The count columns are mean circle + line descriptors, not stored bytes. Merging
+removes 26.1%, 21.4%, and 31.5% of the initial hierarchy descriptors respectively.
+The hierarchy fits faster than the full DP bank; their searches and chosen models
+differ. It beats the DP descriptor count only in the middle excerpt. Source RMS
+errors average 7.33, 7.19, and 6.19 PCM16 units. No audio-quality or compression
+ratio claim follows from these errors/counts.
+
+| Excerpt | First retrieval attempt | Prepared-root retry | Fine-only retry | Mean relevant peaks |
+|---|---:|---:|---:|---:|
+| 60 s | 205.31 ms | 36.61 ms | 25.43 ms | 19.43 |
+| 180 s | 110.11 ms | 21.53 ms | 16.48 ms | 14.43 |
+| 300 s | 477.30 ms | 76.83 ms | 47.51 ms | 24.86 |
+
+The first implementation repeated closed-sum trigonometry per circle/frequency.
+Prepared roots improve this survey's adaptive retrieval by about 5–6×. Sampled
+quiet-band stopping also changed in the retry; results are controls of actual
+implementations, not a claim that only instruction counts changed. Preparation
+costs about 18–26 microseconds separately. The coarse 128-error model skips **zero**
+fine probes here because its conservative disagreement bound is too large;
+coarse+fine search is slower than fine-only search. A source FFT remains faster:
+on the selected first-excerpt window, unpadded, 8× and 64× padded NumPy rFFTs take
+6.125, 32.708, 281.875 microseconds respectively. The
+64× padded FFT returns 32,769 bins; the adaptive list is a different output,
+but this implementation has no dense-spectrum CPU advantage.
+
+
+Python independently evaluates exported centers/radii/angles, checks every source
+sample, and compares **every reported peak**, five arbitrary-frequency controls,
+and spread queried points (including skipped-probe uncertainty). The 21-window
+survey checks 1,209 frequencies; maximum exact-query difference normalized by
+`max(1, largest checked magnitude)` is below 3e-13. This is retrieval error against
+the **same predictor**, separate from its measured source error.
+
+A 64× padded FFT of the same predictor finds 414 above-threshold reference peaks.
+The heuristic search retains 411, leaving three reference peaks unmatched under
+this experiment's 0.75-source-bin matching rule. Matched median distances per
+window range roughly 0.12–0.26 Hz; the padded reference itself has about 0.673 Hz
+spacing. These are empirical agreement measures, not guaranteed frequency errors.
+The bound-only selected-window control exhausts its 8,192-call budget and reports
+unresolved bands. A bounded partial search is never presented as a complete one.
+
+The selected-window precision controls demonstrate both benefit and overhead:
+
+| Coarse sample tolerance | Coarse descriptors | Spectral disagreement bound | Skipped fine probes | Fine probes | Search time |
+|---|---:|---:|---:|---:|---:|
+| 16 | 108 | 1.194 | 1639 | 1424 | 32.52 ms |
+| 32 | 76 | 10.013 | 0 | 3343 | 41.91 ms |
+| 64 | 46 | 21.395 | 0 | 3343 | 37.01 ms |
+| 128 | 30 | 40.715 | 0 | 3343 | 33.46 ms |
+
+Target tolerance remains 16. The tighter coarse definition skips many fine probes,
+but preparing/querying the coarse model still makes total search slower than the
+approximately 25 ms fine-only control. There is no automatic assumption that a
+coarser model or extra zoom is cheaper overall. Precision selection and sharper
+local bounds remain research work.
+
+The synthetic controls use 512 samples at 8 kHz:
+
+| Given tones | Adaptive strongest peak | Source FFT strongest bin | 64× padded FFT strongest bin |
+|---|---:|---:|---:|
+| 401.337 Hz | 401.337047 Hz | 406.250000 Hz | 401.367188 Hz |
+| 401.337, 553.721 Hz | 401.343000 Hz | 406.250000 Hz | 401.367188 Hz |
+| 401.337, 403.337 Hz | 402.094753 Hz | 406.250000 Hz | 402.099609 Hz |
+
+The isolated-tone estimate is between FFT bins and very close to its given
+frequency. The separated pair yields two strong peaks. The pair only 2 Hz apart
+yields **one** strong peak around 402.095 Hz, also seen by the padded FFT: greater
+query precision does not resolve the short-window mixture into its two known
+generators. These noiseless examples do not establish performance on arbitrary
+signals. On the selected Beethoven model, zoom 1/2/4/8 gives the same strongest
+peak near 300.905 Hz. Depth 0/2/4/8/12 retains 23/27/28/28/28 relevant peaks, with
+query work rising after the count stabilizes. This supports an explicit maximum
+depth or gain cutoff, without claiming additional information from zoom.
+
+![Nonuniform frequencies and off-bin control](figures/adaptive-faft-20260930/adaptive-frequencies.png)
+
+![Checked child merging and measured costs](figures/adaptive-faft-20260930/adaptive-merging.png)
+
+![Depth and zoom controls](figures/adaptive-faft-20260930/adaptive-depth-zoom.png)
+
+![Actual depth-limited searches on a measured window](figures/adaptive-faft-20260930/adaptive-depth.gif)
+
+The silent GIF contains five actual searches at depths 0, 2, 4, 8 and 12 over the
+same fixed predictor. It does not invent intermediate frequencies or animate a
+hypothetical spectrum. PNG/SVG versions of the graphs are stored together.
+
+Reproduce with optional NumPy/Matplotlib/Pillow/FFmpeg and Cargo:
+
+```sh
+cargo test --offline --test geometric_faft --test adaptive_faft
+cargo build --offline --release --example adaptive_bench
+python3 -m unittest discover -s tests -p test_adaptive_compare.py -v
+python3 tools/adaptive_compare.py /path/to/music.mp3 /tmp/adaptive-trial \
+  --ffmpeg /path/to/ffmpeg
+# Optional: attach an earlier aggregate run to the retry report.
+# Add --previous-report /tmp/earlier-trial/report.json
+```
+
+Output must be new and outside the repository. Private model/point/dense-sample
+JSON is invertible audio information and remains outside source control; only
+aggregate reports and rendered figures belong here. `adaptive_bench` exports
+private complete frames as JSON Lines; its positional arguments are documented
+in the source. The integral AFT, dyadic geometry and FFT-based phasor controls
+remain available unchanged.
 
 ## Geometry-first FAFT: waveform circles to spectrum
 

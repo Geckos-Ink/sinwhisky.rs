@@ -212,7 +212,40 @@ bits within the admitted bank, not arbitrary geometry. `dtft`/`hann_dtft` crop a
 weight the prepared predictor without refitting; whole-grid queries use closed
 finite sums or batched rotations, O(pieces*bins). Stable resonance limits,
 reanchoring, and explicit line first moments replace integration. Zoom samples
-that same function, not more source data. Tests: `tests/geometric_faft.rs`.
+that same function, not more source data. Separate `hierarchical` fits arbitrary
+integer supports, splits failures against source samples, and refits/validates
+adjacent merges. Depth-limited leaves use checked source-pair lines. Prepared
+`GeometricSpectrum` caches roots and retrieves arbitrary-frequency finite sums;
+closed-sum and arithmetic-rotation kernels are distinct controls. Sample-grid
+amplitude/moment and predictor-disagreement bounds require O(N*zoom) preparation.
+Tests: `tests/geometric_faft.rs`, `tests/adaptive_faft.rs`.
+
+### [src/adaptive_faft.rs](src/adaptive_faft.rs)
+
+Owns nonuniform relevant-frequency search over prepared geometry. Initial coverage,
+strongest-first interval refinement, bounded ternary peak refinement, depth/width/
+combined-query limits, relevance floors, and strongest-first frequency merging are
+explicit. Optional coarse geometry uses a shared-grid weighted L1 disagreement
+bound to skip some fine probes; retained uncertainties are inspectable. Below-floor
+bands use derivative bounds; sampled-quiet/flat LowGain stops are heuristic and may
+miss peaks. Depth/budget/width stops are reported, never proof of completion. Output
+peak brackets are queried neighbors, not confidence intervals. Tests:
+`tests/adaptive_faft.rs`. Arbitrary query precision does not imply resolution
+independent of source duration or a unique physical oscillator decomposition.
+
+### [examples/adaptive_bench.rs](examples/adaptive_bench.rs) and [tools/adaptive_compare.py](tools/adaptive_compare.py)
+
+Measure hierarchical children/checked merges against dyadic DP; adaptive roots
+against the repeated-trig first attempt; coarse/fine precision, depth and zoom;
+off-bin, separated and unresolved near tones; matched Hann and padded FFT controls.
+Python independently predicts from exported geometry and checks all returned peaks,
+off-bin controls and spread queried points, including uncertainty bounds. Requires
+NumPy/Matplotlib/Pillow, FFmpeg and Cargo. Audio/models/complex query data remain
+private in a new output directory outside the repo. Only aggregate JSON/figures
+are published: `docs/experiments/adaptive-faft-beethoven-20260930.json` and
+`docs/figures/adaptive-faft-20260930/`. Synthetic bridge:
+`tests/test_adaptive_compare.py`. Default query pruning has no completeness claim;
+report misses and exhausted budgets alongside timing gains.
 
 ### [examples/geometric_bench.rs](examples/geometric_bench.rs) and [tools/geometric_compare.py](tools/geometric_compare.py)
 
@@ -297,7 +330,8 @@ partial blocks, circles, Fourier phase/quantization, and malformed streams.
 
 ### [docs/COMPRESSION.md](docs/COMPRESSION.md)
 
-Owns geometry-first FAFT fitting, finite sums, point/phase/precision/zoom/bitrate
+Owns hierarchical circle merging/adaptive-frequency limits, inverse rotational
+sums and measured depth/precision/zoom controls; geometry-first FAFT fitting, finite sums, point/phase/precision/zoom/bitrate
 comparisons and retry measurements; earlier FAFT phasor/line limits, dyadic search, dynamic precision, RMS contracts,
 and benchmarks; also Fourier conventions/derivation, subarc limits, candidate search, SWR1 format,
 reproduction, and measured Beethoven compression results. The current AFT section
@@ -484,6 +518,7 @@ extent, and frame-coverage tests detect these errors.
 | `sinwhisky` crate | [src/lib.rs](src/lib.rs), [Cargo.toml](Cargo.toml) | Public f64 analysis/synthesis and Error |
 | Geometry/models | [geometry](src/geometry.rs), [analysis](src/analysis.rs) | Local coordinates and immutable analysis views |
 | `resample`, `Analysis::resample` | [src/resample.rs](src/resample.rs) | Named interpolation contracts |
+| `AdaptiveSpectrum` | [adaptive frequencies](src/adaptive_faft.rs) | Nonuniform relevant peaks; explicit uncertainty and work/heuristic stops |
 | `GeometryFrame`, geometric queries | [direct geometry](src/geometric_faft.rs) | Source-point circles, peak-error bound, O(pieces*bins) finite sums |
 | `FaftFrame`, `transform` | [FAFT](src/faft.rs) | Rotating-circle optimization and sampled FFT; RMS bound, no wire format |
 | `ResearchFrame`, `SegmentModel` | [src/codec.rs](src/codec.rs) | Experimental in-memory prediction only |
@@ -509,6 +544,7 @@ cargo test --offline --test reference_vectors
 cargo test --offline --test cli
 cargo test --offline --test faft
 cargo test --offline --test geometric_faft
+cargo test --offline --test adaptive_faft
 cargo test --offline --test spectral
 cargo test --offline --test aft
 cargo fmt --check
@@ -556,6 +592,15 @@ python3 tools/geometric_compare.py /path/to/music.mp3 /tmp/geometric-trial \
   --ffmpeg /path/to/ffmpeg
 ```
 
+Hierarchical merging and adaptive frequencies:
+
+```sh
+cargo build --offline --release --example adaptive_bench
+python3 -m unittest discover -s tests -p test_adaptive_compare.py -v
+python3 tools/adaptive_compare.py /path/to/music.mp3 /tmp/adaptive-trial \
+  --ffmpeg /path/to/ffmpeg
+```
+
 Cross-validation needs NumPy/C compiler; `audio_compare.py` needs NumPy/FFmpeg.
 The compression lab needs NumPy/FFmpeg and the Rust exporter; its synthetic
 tests need NumPy (bridge test additionally needs the built exporter).
@@ -582,6 +627,7 @@ inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz auto
 | Parameter/size safety | `validation_and_overflow`, `neighbors_and_extreme_finite_inputs` |
 | Frame coverage/error/circle reuse | `segments_cover_every_sample_with_bounded_error`, `codec_reuses_circles_and_lines_and_validates_metadata` |
 | C/Python compatibility | Frozen vectors; optional live cross-validation tool |
+| Hierarchical merges / roots / adaptive peaks / budgets / bounds | `tests/adaptive_faft.rs`; optional `tests/test_adaptive_compare.py` |
 | Geometry-first circles / spectral sums / cropped windows / zoom | `tests/geometric_faft.rs`; optional `tests/test_geometric_compare.py` |
 | FAFT kernel/circles/precision/tree/line limits | `tests/faft.rs`; optional `tests/test_faft_compare.py` |
 | CLI boundary | `command_line_modes_and_failures` |
@@ -613,7 +659,8 @@ This initial unpublished API may evolve; document every behavior change.
 - **Implemented:** reusable analysis, uniform/angular resampling, numeric CLI,
   standalone Cargo tests, optional live comparison and listening scripts, and
   `test_music.sh` with encoded-bitrate reduction and block-based sample-rate upscaling.
-- **Experimental:** geometry-first FAFT coverage and spectrum queries with
+- **Experimental:** hierarchical children/checked variable-support merges and
+  bounded adaptive relevant-frequency queries; geometry-first FAFT coverage and spectrum queries with
   peak-error limits; FFT-based FAFT rotating-circle selection with per-circle precision and
   verified RMS limits; retained integral AFT reference; mono `ResearchFrame`,
   circle transforms/predictor DFT, and an

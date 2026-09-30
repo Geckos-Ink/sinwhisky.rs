@@ -10,6 +10,7 @@
 //! ```
 #![forbid(unsafe_code)]
 
+pub mod adaptive_faft;
 pub mod aft;
 pub mod analysis;
 pub mod codec;

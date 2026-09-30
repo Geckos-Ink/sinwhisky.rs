@@ -140,6 +140,18 @@ P retained angular/line pieces and K frequencies. The [geometry experiments](doc
 compare point banks, precision, phase, zoom, actual MP3 bitrate controls, and two
 implementation attempts on the supplied Beethoven track.
 
+A separate `GeometryFrame::hierarchical` preset splits failed parent circles
+into source-informed children on variable integer supports, then refits adjacent
+children into one checked circle or line. `prepare_spectrum` reuses those models
+at arbitrary frequencies, with optional sampling zoom and Hann weighting.
+`adaptive_faft::AdaptiveSpectrum` returns a variable list of relevant peaks,
+with separate depth, query-budget, frequency-width, relevance, and merging limits.
+The arithmetic rotation kernel prepares circle roots once; it uses finite sums,
+not integrals or an FFT. Flatness pruning is a reported heuristic and can miss
+peaks. Finer frequency queries do not create missing sample information.
+See the [hierarchy/adaptive benchmark](docs/COMPRESSION.md#hierarchical-circles-and-adaptive-relevant-frequencies)
+for measured costs, off-bin estimates, precision/zoom controls, and a GIF.
+
 ```rust
 use sinwhisky::geometric_faft::{GeometryFrame, GeometryParams};
 fn main() -> Result<(), sinwhisky::Error> {
@@ -191,11 +203,12 @@ Subdividing a parent circle alone cannot predict unknown error; source-informed 
 or residual information are required.
 
 ```sh
-cargo test --offline --test spectral --test aft --test faft --test geometric_faft
+cargo test --offline --test spectral --test aft --test faft --test geometric_faft --test adaptive_faft
 # Optional: Python + NumPy + Matplotlib + Pillow + FFmpeg.
 python3 tools/aft_compare.py /path/to/music.mp3 /tmp/aft-trial
 python3 tools/faft_compare.py /path/to/music.mp3 /tmp/faft-trial
 python3 tools/geometric_compare.py /path/to/music.mp3 /tmp/geometric-trial
+python3 tools/adaptive_compare.py /path/to/music.mp3 /tmp/adaptive-trial
 # Optional: Python + NumPy + FFmpeg. Output must be new, outside the repository.
 python3 tools/compression_lab.py /path/to/music.mp3 /tmp/compression-trial \
   --starts 60 180 300 --seconds 1 --tolerances 0 16 128
