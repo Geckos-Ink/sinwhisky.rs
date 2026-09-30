@@ -20,12 +20,12 @@
   evaluation, independent of the existing resampler's blending policy.
 - AFT/FFT benchmarks on 513 Beethoven windows, numeric integration checks,
   frequency/phase differences, scaling plots, spectrograms, and animated spectra.
-- FAFT rotating-circle experiment: radix-2 forward/inverse transforms, dyadic
+- FFT phasor control (first "FAFT" prototype, now `phasor_fft`): radix-2 forward/inverse transforms, dyadic
   constant/line/circle model selection, zero-curvature line limits, per-circle
   precision, and verified RMS budgets. Integral AFT retained as a reference preset.
-- FAFT comparison across 513 Beethoven windows and 3,078 checked reconstructions,
+- Phasor comparison across 513 Beethoven windows and 3,078 checked reconstructions,
   root/tree controls, runtime scaling, precision graphs, and an epicycle GIF.
-- Geometry-first FAFT: circumcircles from waveform points, optimized coverage,
+- Geometry-first sampled spectrum (earlier FAFT attempt): circumcircles from waveform points, optimized coverage,
   dynamic geometry precision, source peak-error bounds, direct finite spectral
   sums, batched roots, cropped Hann queries, and zoomed model spectra.
 - Nine point/phase/precision policies across 63 Beethoven windows, two fitting
@@ -39,26 +39,49 @@
 - 21-window Beethoven hierarchy/adaptive survey with two retrieval kernels,
   off-bin and unresolved near-tone controls, precision/depth/zoom trials, plots/GIF.
 
-## Current focus: geometry-first FAFT
+- **FAFT** ([definition](docs/FAFT.md)): exact closed-form Fourier integral of the
+  circle-determined curve at any real frequency, with no zoom, sampling, FFT or
+  quadrature. Rotate-and-add queries with prepared rotation turns, exact
+  continuous Hann, analytic derivatives, duration-spaced scan plus Newton peaks,
+  merging/floors, and circle-rate references. Same-curve agreement with integral
+  AFT is ~1e-13; independent quadrature ~1e-14. Measured on 63 Beethoven windows
+  against the earlier sampled kernels, adaptive search and FFT controls. Zoom
+  convergence and the Poisson image identity are tested.
+
+## Current focus: FAFT of determined circles
+
+1. Rotate and add in time: slide windows by updating only rotations that enter
+   or leave, for fixed sets of continuous frequencies and the three Hann shifts.
+   Measure drift and re-anchoring against full recomputation.
+2. Continuous joins in circle determination. The tolerance-bounded value jumps
+   between rounded circles cause the 1/z tail of the zoom difference and
+   1/omega spectral tails. Test join constraints without loosening source checks.
+3. Peak-list completeness and cost. The density-2 scan misses weak maxima near
+   stronger peaks (about 5% of the adaptive list). Test certified bounds,
+   adaptive local densification, and an approximate seed pass (keeping every
+   reported value exact FAFT). Compare matched FFT/Goertzel and padded-FFT costs.
+4. Circle determination whose angular rates carry physical frequency. The current
+   rates are geometric (aperture-dependent); circle-seeded search found only
+   41-43% of the peaks and was slower than the scan.
+5. Dense spectra are O(rotations × frequencies). Only consider butterfly/NUFFT-style
+   interpolation with a stated error bound and measured crossover size; no FFT
+   speed claim exists today.
+6. Keep the sampled geometry/adaptive spectra, integral AFT and FFT phasor control
+   as references. Their targets differ; zooming a predictor adds no observations.
+
+## Earlier geometry-first focus (controls)
 
 1. Prune point/phase candidates using justified prediction bounds; fitting is now
-   the dominant cost. Measure reuse across neighboring time windows.
+   the dominant cost (1-3 ms per 1,024-sample window, vs microseconds per FAFT
+   query). Measure reuse across neighboring time windows.
 2. Improve greedy hierarchical splitting/merging with shared circle parameters,
    source-checked parent/child deltas, residual circles, and reusable model banks.
    Variable supports and checked adjacent refitting now exist; no global optimum
    is established.
 3. Define an objective that also constrains spectral phase/band errors: a source
    sample-error limit alone allows changes in quiet spectral bins.
-4. Reduce adaptive-search oracle cost and misses; compare selected-frequency
-   queries with matched FFT/Goertzel methods, group compatible angular rates, and
-   tighten pruning bounds. The prepared arithmetic kernel improves cost, but
-   padded FFT remains faster in the current survey. Flatness pruning is heuristic;
-   the bound-only control exhausts its budget. Coarse prediction sometimes saves
-   no work when its disagreement bound exceeds the relevance floor.
-5. Test adaptive per-field precision, a bounded wire format with measured bytes,
+4. Test adaptive per-field precision, a bounded wire format with measured bytes,
    continuity/overlap, broader audio, and prediction from truly omitted points.
-6. Keep the integral AFT and FFT-based phasor control as references. Their model
-   definitions differ; zooming a predictor does not recover missing observations.
 
 ## Next: establish quality and cost
 

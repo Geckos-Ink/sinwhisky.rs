@@ -1,6 +1,6 @@
 use sinwhisky::geometric_faft::{geometric_sum, GeometryFrame, GeometryParams, WavePrimitive};
 use sinwhisky::spectral::Complex;
-use sinwhisky::{faft::transform, Error};
+use sinwhisky::{phasor_fft::transform, Error};
 use std::f64::consts::{PI, TAU};
 fn distance(a: Complex, b: Complex) -> f64 {
     (a.re - b.re).hypot(a.im - b.im)

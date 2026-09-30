@@ -1,13 +1,26 @@
 # Angular Fourier and circle compression experiments
 
-The current focus is hierarchical circle fitting and adaptive relevant-frequency
-retrieval from waveform geometry. This extension precedes the dyadic geometry
-control, the earlier FFT-based control, integral reference preset, and compression
-experiment.
+> **FAFT is defined in [FAFT.md](FAFT.md).** It is the exact, closed-form Fourier
+> integral of the circle-determined curve at any real frequency, with its
+> continuous relevant-peak search, measurements and limits. The sections below are
+> earlier experiments, kept as controls with their published numbers. The
+> hierarchical/adaptive and geometry-first sections compute a **sampled** DTFT of
+> the circle curve, with `zoom` as a transform parameter. That only approaches the
+> transform of the circles, as a zoom-z DTFT equals FAFT plus spectral images
+> (measured in FAFT.md). The "FAFT" rotating-phasor section is an FFT-based
+> optimizer, now the `phasor_fft` module.
+
+The earlier hierarchical circle fitting and adaptive relevant-frequency retrieval
+follow. They precede the dyadic geometry control, the FFT phasor control, the
+integral reference preset, and the compression experiment.
 
 ## Hierarchical circles and adaptive relevant frequencies
 
-The current extension adds **source-informed children, variable sample supports,
+Status: `GeometryFrame::hierarchical` is the circle determination feeding FAFT.
+Its `GeometricSpectrum`/`AdaptiveSpectrum` spectra are the sampled (zoom)
+control that [FAFT.md](FAFT.md) re-measures on the same windows.
+
+This extension added **source-informed children, variable sample supports,
 checked circle merging, and a variable list of relevant frequencies**. The older
 DP geometry bank below remains an independent control. The pipeline is:
 
@@ -273,11 +286,12 @@ private complete frames as JSON Lines; its positional arguments are documented
 in the source. The integral AFT, dyadic geometry and FFT-based phasor controls
 remain available unchanged.
 
-## Geometry-first FAFT: waveform circles to spectrum
+## Geometry-first sampled spectrum (earlier FAFT attempt)
 
-This is the current direction, following the distinction between fitting circles
-through **waveform points** and finding rotating phasors through an FFT. The
-pipeline is now:
+This attempt followed the distinction between fitting circles through **waveform
+points** and finding rotating phasors through an FFT. Its spectrum is the sampled
+DTFT of the fitted curve (optionally zoomed), not the curve's transform; see
+[FAFT.md](FAFT.md). The pipeline was:
 
 ```text
 waveform points → circumcircle centers/radii/angular endpoints
@@ -289,7 +303,7 @@ waveform points → circumcircle centers/radii/angular endpoints
 `GeometryParams`, retained `WaveCircle` descriptors, `evaluate`, `decode`,
 `dtft`, `hann_dtft`, `spectrum_closed`, and `spectrum_rotations`.
 There is **no FFT, numerical integration, or spectral fitting** in this path.
-The earlier `faft::FaftFrame` remains an FFT-based control; `AngularFrame`
+The FFT-based `phasor_fft::PhasorFrame` (formerly `faft::FaftFrame`) remains a control; `AngularFrame`
 remains the integral reference preset. All three have distinct model definitions.
 
 ### What is fitted and optimized
@@ -558,9 +572,9 @@ make spectral phase/error part of a stated objective, and compare selected-bin
 queries with matched source FFT/Goertzel queries. Current operation counts and
 error budgets are explicit; there is no universal fastest-transform claim.
 
-## FAFT: fast rotating circles with model optimization
+## FFT phasor control (earlier FAFT prototype)
 
-This earlier **FFT-based control** was the first FAFT prototype (Fast Angular Fourier Transform with circle
+This **FFT-based control** was the first FAFT prototype (Fast Angular Fourier Transform with circle
 optimization). The earlier integral AFT is retained unchanged as a **reference
 preset** for its continuous angular interpolant. FAFT uses rotating vectors and
 real projections; it does not integrate the old fitted arcs faster or reproduce
@@ -586,8 +600,9 @@ circle describes one real sinusoid; the corresponding complex DFT has two
 conjugate bins. The continuous fractional-time extension is specified by these
 projections, not by the original triplet interpolation.
 
-[src/faft.rs](../src/faft.rs) implements safe f64 radix-2 butterflies with angle
-rotations, inverse reconstruction, and `FaftFrame` model selection. The exact
+[src/phasor_fft.rs](../src/phasor_fft.rs) (formerly `src/faft.rs`) implements safe
+f64 radix-2 butterflies with angle rotations, inverse reconstruction, and
+`PhasorFrame` (formerly `FaftFrame`) model selection. The exact
 kernel is O(N log N) and agrees with the sampled DFT. This is the established
 [FFT factorization](https://www.fftw.org/~fftw/fftw-paper-ieee.pdf); the experimental
 part here is the choice of support, baseline, circles, and precision. Power-of-two
@@ -732,13 +747,16 @@ source. 48 frames at 10 fps traverse one 1,024-sample window, not 4.8 seconds of
 audio. Child support is temporal subdivision, not a constraint that a child
 circle's center physically lies on its parent's circumference.
 
-### Reproduce FAFT
+### Reproduce the FFT phasor control
+
+The test, example and tool were renamed with the module; figure/output names from
+a new run start with `phasor-` instead of `faft-`.
 
 ```sh
-cargo test --offline --test faft
-cargo build --offline --release --example faft_bench --example aft_bench
-python3 -m unittest discover -s tests -p test_faft_compare.py -v
-python3 tools/faft_compare.py /path/to/music.mp3 /tmp/faft-trial \
+cargo test --offline --test phasor_fft
+cargo build --offline --release --example phasor_bench --example aft_bench
+python3 -m unittest discover -s tests -p test_phasor_compare.py -v
+python3 tools/phasor_compare.py /path/to/music.mp3 /tmp/phasor-trial \
   --ffmpeg /path/to/ffmpeg
 ```
 

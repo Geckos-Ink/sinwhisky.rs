@@ -81,6 +81,23 @@ fn sinc_derivative(x: f64) -> f64 {
     }
 }
 
+/// Read-only view of one prepared half on `u in [-1/2, 1/2]` of its unit interval.
+/// `Arc`: `center + radius*sin(theta + beta*u)`; `Line`: `middle + slope*u`.
+/// The interpolant on each interval is the average of its two halves.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AngularHalf {
+    Arc {
+        center: f64,
+        radius: f64,
+        theta: f64,
+        beta: f64,
+    },
+    Line {
+        middle: f64,
+        slope: f64,
+    },
+}
+
 /// Counts halves, two per source interval. Rejected circles are included in lines.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AngularStats {
@@ -169,6 +186,28 @@ impl AngularFrame {
 
     pub fn stats(&self) -> AngularStats {
         self.stats
+    }
+
+    /// Both prepared halves of every unit interval, in interval order. Exposes the
+    /// immutable geometry so other transforms can reuse it without refitting.
+    pub fn halves(&self) -> impl Iterator<Item = [AngularHalf; 2]> + '_ {
+        self.intervals.iter().map(|pair| {
+            pair.map(|half| match half {
+                Half::Arc {
+                    cy,
+                    radius,
+                    theta,
+                    beta,
+                    ..
+                } => AngularHalf::Arc {
+                    center: cy,
+                    radius,
+                    theta,
+                    beta,
+                },
+                Half::Line { middle, slope } => AngularHalf::Line { middle, slope },
+            })
+        })
     }
 
     /// Evaluate the same interpolant used by `fourier`, periodically extended.

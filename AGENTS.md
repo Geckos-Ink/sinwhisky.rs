@@ -89,6 +89,12 @@ code. Optional NumPy/FFmpeg research tools must not become library dependencies.
 - **Angular mode:** `OriginalAngular` requires neighbors=1. Original aperture and
   synthesis presets are paired by `resample`; callers using `Analysis` choose
   their own fit preset. `paper_angular_example` protects the finite-zoom window.
+- **FAFT:** [faft](src/faft.rs) integrates the circle curve exactly at any real
+  omega; zoom is never a transform parameter. `CircleCurve` coverage is contiguous
+  (stacks share a support), conversions copy geometry without refitting, and a
+  zoom-z sampled transform equals FAFT plus images (tested). Peaks are exact
+  maxima of that function; the duration-spaced scan is a seed heuristic.
+  Protected by `tests/faft.rs`.
 - **Frame coverage/error:** [ResearchFrame::from_analysis](src/codec.rs) partitions
   source samples into nonempty half-open ranges. Every predicted source sample
   is checked against tolerance. Decode has no dependency on original PCM.
@@ -102,6 +108,11 @@ Numeric CLI → parse f64 samples → `Analysis::new` → reusable triplet model
 Alternative consumer: `Analysis` → `ResearchFrame::from_analysis` → ordered
 circle/line/literal segments → `decode` → `ErrorMetrics`. This path evaluates
 uniform-x circle predictors and does not blend segment boundaries.
+
+FAFT consumer: source samples → circle determination (`GeometryFrame` or
+`AngularFrame`) → `CircleCurve` rotations → `Faft` prepared window → exact values
+at arbitrary frequencies, analytic derivatives, and relevant peaks. Zoom only
+samples the same curve for synthesis and comparison.
 
 The library is synchronous, mono, and fully buffered. There are no threads,
 services, persistence adapters, callbacks, or networking. The optional Python
@@ -192,15 +203,18 @@ source-pair line. Circle endpoint acceptance is 1e-8 times max(1, endpoint scale
 rejections and line/circle halves are counted. The prepared geometry is immutable.
 `evaluate` extends periodically; `fourier` analytically integrates on `[0,N]`;
 `spectrum` covers the standard nonnegative bins. Full cost is O(N²), not an FFT.
-Retained as the integral reference preset; FAFT is a separate discrete target.
+Retained as the integral reference preset; FAFT computes this same integral on
+this curve (through `halves`) without numerical integration.
 The AFT interpolation policy is separate from finite-zoom angular resampling.
+`halves` is a read-only view of the prepared halves, used by FAFT for same-curve checks.
 The continuous Nyquist coefficient need not be real. `tests/aft.rs` checks
 coverage, original geometry reuse, quadrature, sinc² linear control, phase shifts,
 conjugacy, constants/short inputs, and validation.
 
 ### [src/geometric_faft.rs](src/geometric_faft.rs)
 
-Owns the geometry-first FAFT experiment: `GeometryFrame` fits source-point
+Circle determination for FAFT, plus the earlier sampled-spectrum control (the
+"geometry-first FAFT" experiment, a zoomed DTFT, not the transform): `GeometryFrame` fits source-point
 circumcircles and finite lines BEFORE spectrum retrieval, with no FFT or integral.
 Searches dyadic support lengths, interior points, aperture gains, and independent
 per-circle significand widths. Normalized coordinates, periodic terminal anchor,
@@ -222,6 +236,7 @@ Tests: `tests/geometric_faft.rs`, `tests/adaptive_faft.rs`.
 
 ### [src/adaptive_faft.rs](src/adaptive_faft.rs)
 
+Sampled-predictor (zoom DTFT) control, superseded for the transform by `faft`.
 Owns nonuniform relevant-frequency search over prepared geometry. Initial coverage,
 strongest-first interval refinement, bounded ternary peak refinement, depth/width/
 combined-query limits, relevance floors, and strongest-first frequency merging are
@@ -262,8 +277,40 @@ figures: `docs/figures/geometric-faft-20260930/`.
 
 ### [src/faft.rs](src/faft.rs)
 
-Owns the earlier FFT-based FAFT control kernel and model optimizer. `transform` is a
-standard radix-2 forward/inverse DFT, O(N log N). `FaftFrame` searches dyadic
+Owns FAFT, the Fourier transform of determined circles. `Rotation` (center, radius,
+phase, rate, slope on an integer support) and `CircleCurve` (contiguous coverage,
+stacked supports add) come from `GeometryFrame` or `AngularFrame` without refit.
+`CircleCurve::evaluate` is the curve zoom samples. `transform` crops to a window,
+anchors each rotation (start value plus cos/sin deviations) and prepares
+`exp(i*rate*length)`. `Faft::integral/value/values` are exact closed forms at any
+finite omega (rectangular or analytic continuous Hann), chaining support phases by
+multiplication, with Horner series below the stated |delta*L| thresholds.
+`derivatives` returns centered first/second omega derivatives. `references` groups
+circle rates (fixed width, no chains). `peaks` = duration-spaced scan (Hann shares
+an extended grid), parabolic start, bracketed Newton, flank/unconverged drops,
+merge width and floors, with `PeakStats`. O(rotations) per query. No FFT, sampling
+or quadrature; no dense-spectrum speed claim. Circle rates are geometric, not
+physical frequencies; scan completeness is measured, not guaranteed.
+Tests: `tests/faft.rs`; doctest in the module. Definition: [docs/FAFT.md](docs/FAFT.md).
+
+### [examples/faft_bench.rs](examples/faft_bench.rs), [tools/faft_compare.py](tools/faft_compare.py), [tools/faft_figures.py](tools/faft_figures.py)
+
+Rust JSON Lines per frame: hierarchical fit, FAFT preparation/queries/peaks
+(density 1/2/4, circle seeds), the earlier sampled kernels and adaptive search on
+the same geometry, zoom 1..64 differences, integral AFT versus FAFT on its curve,
+optional dense 0..3π spectra, and private rotations. Python needs NumPy and Cargo
+(FFmpeg only for non-WAV input; `afconvert` WAV works). It independently evaluates
+the rotations, checks source bounds, Gauss-Legendre values and every peak's local
+maximum, and matches padded source-FFT and adaptive controls. Hand-written SVG
+figures (no Matplotlib). Output must be new and outside the repo; private JSON can
+reconstruct audio. Published: `docs/experiments/faft-circle-arcs-beethoven-20260930.json`,
+`docs/figures/faft-circle-arcs-20260930/`. Synthetic bridge: `tests/test_faft_compare.py`.
+
+### [src/phasor_fft.rs](src/phasor_fft.rs)
+
+Formerly `src/faft.rs`: the first "FAFT" prototype, renamed because it never used
+fitted circles. Owns the FFT-based phasor control kernel and model optimizer. `transform` is a
+standard radix-2 forward/inverse DFT, O(N log N). `PhasorFrame` searches dyadic
 constant/endpoint-line plus rotating-circle candidates with per-circle Cartesian
 precision. Children replace parents on disjoint supports; they are not residual
 predictions. `LineLimit` is an explicit finite zero-curvature representation.
@@ -272,18 +319,19 @@ the generated candidates and equal per-leaf RMS budgets. `decode` needs no sourc
 PCM; both leaves and final rescaled output are checked. `evaluate` has no join
 continuity or intersample error guarantee. Model fields are private; descriptor
 views are immutable. Bits are hypothetical costs, not a serialized format or rate.
-`tests/faft.rs` checks direct DFT/inverse agreement, phase/Nyquist, sparse tones,
+`tests/phasor_fft.rs` checks direct DFT/inverse agreement, phase/Nyquist, sparse tones,
 precision, child selection, line limits, coverage, numerical range, and errors.
 
-### [examples/faft_bench.rs](examples/faft_bench.rs) and [tools/faft_compare.py](tools/faft_compare.py)
+### [examples/phasor_bench.rs](examples/phasor_bench.rs) and [tools/phasor_compare.py](tools/phasor_compare.py)
 
-Rust JSON Lines records warmed kernel/search/decode timings and private models.
+Renamed from `faft_bench`/`faft_compare.py` with the module. Rust JSON Lines
+records warmed kernel/search/decode timings and private models.
 Python compares NumPy rFFT, root/tree optimization, and integral AFT; independently
 checks direct projected-circle reconstruction and RMS for every trial. Generates
 aggregate JSON, PNG/SVG plots, and a measured epicycle GIF. Requires NumPy,
 Matplotlib, Pillow, FFmpeg, and Cargo; none are core dependencies. Output must be
 new and outside the repository. `private-selected-model.json` is invertible audio
-information and must never enter version control. Tests: `tests/test_faft_compare.py`.
+information and must never enter version control. Tests: `tests/test_phasor_compare.py`.
 Published results: `docs/experiments/faft-beethoven-20260930.json`, figures under
 `docs/figures/faft-20260930/`. Treat the unchanged integral AFT as a reference preset.
 
@@ -328,8 +376,16 @@ serialization, counts full file bytes, and writes only to a new directory outsid
 the repository. `tests/test_compression_lab.py` covers exact/bounded round trips,
 partial blocks, circles, Fourier phase/quantization, and malformed streams.
 
+### [docs/FAFT.md](docs/FAFT.md)
+
+Owns the FAFT definition: stage separation (determination, zoom, transform), the
+closed forms and rotate-and-add rule, numerics, peak policy, circle-reference
+findings, the renamed control, measured Beethoven results and reproduction. Update
+it with any `faft` behaviour or measurement change; numbers only from actual runs.
+
 ### [docs/COMPRESSION.md](docs/COMPRESSION.md)
 
+Opens by pointing to FAFT.md and labels its FAFT-named sections as controls.
 Owns hierarchical circle merging/adaptive-frequency limits, inverse rotational
 sums and measured depth/precision/zoom controls; geometry-first FAFT fitting, finite sums, point/phase/precision/zoom/bitrate
 comparisons and retry measurements; earlier FAFT phasor/line limits, dyadic search, dynamic precision, RMS contracts,
@@ -518,9 +574,10 @@ extent, and frame-coverage tests detect these errors.
 | `sinwhisky` crate | [src/lib.rs](src/lib.rs), [Cargo.toml](Cargo.toml) | Public f64 analysis/synthesis and Error |
 | Geometry/models | [geometry](src/geometry.rs), [analysis](src/analysis.rs) | Local coordinates and immutable analysis views |
 | `resample`, `Analysis::resample` | [src/resample.rs](src/resample.rs) | Named interpolation contracts |
-| `AdaptiveSpectrum` | [adaptive frequencies](src/adaptive_faft.rs) | Nonuniform relevant peaks; explicit uncertainty and work/heuristic stops |
+| `AdaptiveSpectrum` | [adaptive frequencies](src/adaptive_faft.rs) | Sampled-control peaks; explicit uncertainty and work/heuristic stops |
 | `GeometryFrame`, geometric queries | [direct geometry](src/geometric_faft.rs) | Source-point circles, peak-error bound, O(pieces*bins) finite sums |
-| `FaftFrame`, `transform` | [FAFT](src/faft.rs) | Rotating-circle optimization and sampled FFT; RMS bound, no wire format |
+| `CircleCurve`, `Faft`, `Rotation` | [FAFT](src/faft.rs) | Exact continuous transform of circle curves; peaks at real frequencies; no zoom/FFT |
+| `PhasorFrame`, `transform` | [FFT phasor control](src/phasor_fft.rs) | Rotating-circle optimization and sampled FFT; RMS bound, no wire format |
 | `ResearchFrame`, `SegmentModel` | [src/codec.rs](src/codec.rs) | Experimental in-memory prediction only |
 | Periodic angular AFT | [src/aft.rs](src/aft.rs) | Continuous angular interpolant, explicit joins and closing interval |
 | Arc transforms and frame DFT | [src/spectral.rs](src/spectral.rs) | Continuous vs. sampled transforms; no FFT speed claim |
@@ -543,6 +600,7 @@ cargo test --offline --test contracts
 cargo test --offline --test reference_vectors
 cargo test --offline --test cli
 cargo test --offline --test faft
+cargo test --offline --test phasor_fft
 cargo test --offline --test geometric_faft
 cargo test --offline --test adaptive_faft
 cargo test --offline --test spectral
@@ -592,6 +650,14 @@ python3 tools/geometric_compare.py /path/to/music.mp3 /tmp/geometric-trial \
   --ffmpeg /path/to/ffmpeg
 ```
 
+FAFT measurements (NumPy + Cargo; WAV input avoids FFmpeg):
+
+```sh
+cargo build --offline --release --example faft_bench
+python3 -m unittest discover -s tests -p test_faft_compare.py -v
+python3 tools/faft_compare.py /path/to/music.wav /tmp/faft-trial
+```
+
 Hierarchical merging and adaptive frequencies:
 
 ```sh
@@ -629,7 +695,8 @@ inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz auto
 | C/Python compatibility | Frozen vectors; optional live cross-validation tool |
 | Hierarchical merges / roots / adaptive peaks / budgets / bounds | `tests/adaptive_faft.rs`; optional `tests/test_adaptive_compare.py` |
 | Geometry-first circles / spectral sums / cropped windows / zoom | `tests/geometric_faft.rs`; optional `tests/test_geometric_compare.py` |
-| FAFT kernel/circles/precision/tree/line limits | `tests/faft.rs`; optional `tests/test_faft_compare.py` |
+| FAFT exactness/derivatives/AFT same curve/zoom images/peaks/validation | `tests/faft.rs`, doctest; optional `tests/test_faft_compare.py` |
+| FFT phasor kernel/circles/precision/tree/line limits | `tests/phasor_fft.rs`; optional `tests/test_phasor_compare.py` |
 | CLI boundary | `command_line_modes_and_failures` |
 | Music wrapper/blocks/bitrate/fractional upscale | Optional `tests/test_music.py` integration suite |
 | Periodic AFT / benchmark conventions | `tests/aft.rs`, optional `tests/test_aft_compare.py` |
@@ -659,16 +726,19 @@ This initial unpublished API may evolve; document every behavior change.
 - **Implemented:** reusable analysis, uniform/angular resampling, numeric CLI,
   standalone Cargo tests, optional live comparison and listening scripts, and
   `test_music.sh` with encoded-bitrate reduction and block-based sample-rate upscaling.
-- **Experimental:** hierarchical children/checked variable-support merges and
-  bounded adaptive relevant-frequency queries; geometry-first FAFT coverage and spectrum queries with
-  peak-error limits; FFT-based FAFT rotating-circle selection with per-circle precision and
+- **Experimental:** FAFT, the exact continuous transform of circle curves, with
+  continuous relevant peaks (measured, not complete); hierarchical
+  children/checked variable-support merges and bounded adaptive relevant-frequency
+  queries; the geometry-first sampled-spectrum control with peak-error limits;
+  the FFT phasor control's rotating-circle selection with per-circle precision and
   verified RMS limits; retained integral AFT reference; mono `ResearchFrame`,
   circle transforms/predictor DFT, and an
   optional NumPy circle/subarc/Fourier lab with full byte/error measurements.
   Three short Beethoven excerpts show no material circle-specific coding gain.
 - **Known gaps:** uniform branch mismatch; no stable compression format, native
   audio I/O, streaming, stereo coupling, perceptual validation, or cross-platform CI.
-- **Planned:** see [ROADMAP.md](ROADMAP.md), especially off-grid/residual circle
+- **Planned:** see [ROADMAP.md](ROADMAP.md), especially sliding FAFT windows,
+  continuous circle joins, peak-list completeness, off-grid/residual circle
   search, continuity, shared distortion allocation, geometry quantization, better residual
   coding, broader byte/error measurements and a separately validated FLT implementation.
 

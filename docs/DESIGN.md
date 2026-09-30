@@ -136,11 +136,52 @@ Nyquist need not be real. Do not feed these coefficients to a discrete inverse
 FFT and assume exact reconstruction. The [current comparison](COMPRESSION.md#angular-fourier-transform-aft-reference-preset-benchmark)
 uses identical periodic-Hann-windowed samples, a linear-interpolation control,
 and a dense midpoint-FFT check with the required integration weight/phase.
+`AngularFrame::halves` exposes the prepared halves read-only. FAFT reuses them
+to compute the same integral without integration; the values agree to
+about 1e-13.
 
-## FFT-based FAFT control
+## FAFT: the transform of determined circles
 
-`faft::transform` computes the sampled DFT through radix-2 rotations. This is a
-conventional FFT kernel. `FaftFrame` adds a separate dyadic model search: local
+`faft` keeps three stages apart, which earlier experiments had mixed. Circle
+determination (`GeometryFrame`, triplet `Analysis`/`AngularFrame`) fits geometry
+from source points. Zoom (SinWhisky synthesis) samples the resulting curve.
+FAFT integrates that curve against `exp(-i*omega*t)`. Each equal-angle half is
+represented as a `Rotation`: `center + radius*sin(phase + rate*u) + slope*u` on
+an integer support. `CircleCurve` validates contiguous coverage; stacked
+rotations on one support add, which represents the AFT's averaged halves.
+Conversions from `GeometryFrame` and `AngularFrame` copy geometry without
+refitting and reproduce each model's own evaluation (tested pointwise).
+
+`CircleCurve::transform` crops rotations to an integer window once, converts
+them to an anchored form (start value plus cosine/sine deviations) to avoid
+center/radius cancellation, and prepares each `exp(i*rate*length)`. A query then
+chains support phases by multiplication. It uses one sin/cos pair per frequency,
+periodic re-anchoring and no per-rotation transcendental calls. Near DC or
+resonance, stated thresholds switch to Horner series. The continuous Hann is
+exact as three shifted rectangular transforms. Values are normalized by the
+window weight sum with phase origin at the window start. Derivative queries use
+the window centre. Frequencies are arbitrary finite reals, including above pi.
+The result is the exact transform of the curve, not of the source samples, and
+the source error bound does not extend to intersample values.
+
+Zoom is not a transform parameter. A zoom-z sampled transform equals FAFT plus
+its spectral images and half-jump terms at tolerance-bounded joins (Poisson
+summation, tested). `peaks` scans at a spacing set by the window duration, not
+by a sample count. It starts Newton from parabolic estimates, refines with exact
+analytic derivatives inside a derivative-sign bracket, and drops flanks and
+unconverged seeds, counting them. It merges peaks within a stated width and
+applies relative/absolute floors. The scan is a heuristic seed source with a
+measured miss rate, not a completeness bound. `references` groups rotation rates
+in fixed-width groups (no transitive chains). Rates are geometric and were
+measured to be poor spectral seeds, so circle seeding is an option, not the
+default. Costs are O(rotations) per frequency and O(rotations × scan points) per
+peak list. No FFT speed claim is made. [FAFT.md](FAFT.md) holds the definition,
+measurements and limits.
+
+## FFT phasor control (formerly `faft`)
+
+`phasor_fft::transform` computes the sampled DFT through radix-2 rotations. This is a
+conventional FFT kernel. `PhasorFrame` (formerly `faft::FaftFrame`) adds a separate dyadic model search: local
 constant or endpoint-line baseline, energy-ranked Fourier circles, and dynamic
 Cartesian precision per circle. Parent and child supports compete; chosen leaves
 partition the input. Child circles are source-informed replacements, not residual
@@ -166,14 +207,16 @@ bound does not imply a maximum or intersample error bound.
 
 The core transform is O(N log N); the full dyadic search is O(N log² N).
 `estimated_model_bits` is a selection metric, not measured storage. There is no
-FAFT serializer or new resampling mode. The integral `AngularFrame` remains
+phasor serializer or new resampling mode. The integral `AngularFrame` remains
 unchanged as a reference preset with a different continuous transform target.
-The [FAFT experiment](COMPRESSION.md#faft-fast-rotating-circles-with-model-optimization)
+The [phasor experiment](COMPRESSION.md#fft-phasor-control-earlier-faft-prototype)
 records definitions, error accounting, runtime boundaries, and actual comparisons.
 
-## Geometry-first FAFT
+## Geometry-first sampled spectrum (control)
 
-`geometric_faft::GeometryFrame` fits independent time/amplitude circumcircles
+This was an earlier FAFT attempt. Its spectra are sampled (zoomed) DTFTs of the
+fitted curve; `GeometryFrame` itself is now the circle-determination stage for
+FAFT. `geometric_faft::GeometryFrame` fits independent time/amplitude circumcircles
 through selected waveform points, then retains centers, radii, local x scale,
 three unwrapped angles, and coverage. Its predictions advance equal angles on
 each side of the fitting middle point. Fitting searches dyadic spans, midpoint
@@ -206,7 +249,7 @@ Whole-spectrum cost is O(PK), and can be quadratic when many pieces are required
 Zoom changes the density at which the SAME geometric function is sampled and
 restores scale with a `1/zoom` normalization; it cannot add observations.
 
-The [direct geometry experiments](COMPRESSION.md#geometry-first-faft-waveform-circles-to-spectrum)
+The [direct geometry experiments](COMPRESSION.md#geometry-first-sampled-spectrum-earlier-faft-attempt)
 measure error against the source separately from numerical retrieval error,
 compare different point/phase/precision banks and two implementation attempts,
 and test omitted points, zoom, and encoded MP3 bitrate controls. Spectra at a
@@ -215,6 +258,9 @@ frequency decomposition. The FFT-based control and integral AFT reference remain
 available with their earlier public contracts.
 
 ## Hierarchical geometry and adaptive frequencies
+
+The hierarchy is the circle determination used by FAFT. Its `GeometricSpectrum`
+and `AdaptiveSpectrum` compute the sampled (zoom) transform and remain controls.
 
 `GeometryFrame::hierarchical` is a separate greedy preset. Parent supports can
 have any integer length up to the configured cap (2..256). A failed fit splits

@@ -17,6 +17,7 @@ pub mod codec;
 pub mod faft;
 pub mod geometric_faft;
 pub mod geometry;
+pub mod phasor_fft;
 pub mod resample;
 pub mod spectral;
 

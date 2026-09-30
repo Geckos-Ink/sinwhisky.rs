@@ -129,14 +129,48 @@ controls. Its experimental SWR1 streams are decoded independently and checked
 against PCM16 error bounds; this is not a stable audio format or a quality claim.
 The resampler's contracts and dependencies are unchanged.
 
-The current **geometry-first FAFT** fits circles through waveform points, then
-retrieves the predicted sound's spectrum from retained centers, radii, and angular
-phases using finite geometric sums. `geometric_faft::GeometryFrame` searches point
+**FAFT** ([definition and measurements](docs/FAFT.md)) is the Fourier transform
+*of the determined circles*. Each equal-angle half of a fitted circle is a finite
+rotation `center + radius*sin(phase + rate*u)` on its support. `faft::CircleCurve`
+collects them, and `Faft::value(omega)` integrates the curve exactly, in closed
+form, at any real frequency, including between DFT bins and above the source
+Nyquist. It uses no zoom, sampling, FFT or quadrature. Queries use a
+rotate-and-add rule: each rotation's closed transform is multiplied by a chained
+support phase and added. There are no trigonometric calls per rotation, so a
+query costs O(rotations). `Faft::peaks` returns a variable list of relevant peaks
+at continuous frequencies: a scan spaced by the window's duration, Newton
+refinement with exact analytic derivatives, merging, and floors. Zoom stays a
+SinWhisky synthesis tool that samples the curve. A zoom-z sampled spectrum equals
+FAFT plus spectral images, which the tests check. On 63 Beethoven windows, an
+exact continuous query took 2.4–10.6 µs and a converged peak list 1.4–10.9 ms,
+against 17–49 ms for the earlier adaptive search. An FFT of the samples remains
+faster for a complete fixed-bin spectrum of the samples.
+
+```rust
+use sinwhisky::faft::{CircleCurve, PeakParams, Weighting};
+use sinwhisky::geometric_faft::{GeometryFrame, GeometryParams, HierarchyParams};
+fn main() -> Result<(), sinwhisky::Error> {
+    let samples: Vec<f64> = (0..512).map(|i| 1000.0 * (0.3137 * i as f64).sin()).collect();
+    let params = GeometryParams { max_error: 0.5, max_span: 64, ..GeometryParams::default() };
+    let (frame, _) = GeometryFrame::hierarchical(&samples, params, HierarchyParams::default())?;
+    let faft = CircleCurve::from_geometry(&frame)?.transform(0..512, Weighting::Hann)?;
+    let off_grid = faft.value(0.31)?; // any real omega, including above pi
+    let peaks = faft.peaks(PeakParams::default())?.peaks;
+    assert!(!peaks.is_empty() && off_grid.re.is_finite());
+    Ok(())
+}
+```
+
+The earlier **geometry-first sampled spectrum** (a control) fits circles through
+waveform points, then retrieves the *sampled* (optionally zoomed) DTFT of the
+predicted sound from retained centers, radii, and angular phases using finite
+geometric sums. Its `GeometryFrame` is also the circle-determination stage used
+by FAFT. `geometric_faft::GeometryFrame` searches point
 spacing, interior phase, aperture, and per-circle parameter precision, checking a
 maximum source-sample error bound. `dtft` and `hann_dtft` query time-local windows
 without another fit; `spectrum_rotations` computes a whole grid using batched
 rotations. No FFT or integral is used in that path. Full query cost is O(PK), with
-P retained angular/line pieces and K frequencies. The [geometry experiments](docs/COMPRESSION.md#geometry-first-faft-waveform-circles-to-spectrum)
+P retained angular/line pieces and K frequencies. The [geometry experiments](docs/COMPRESSION.md#geometry-first-sampled-spectrum-earlier-faft-attempt)
 compare point banks, precision, phase, zoom, actual MP3 bitrate controls, and two
 implementation attempts on the supplied Beethoven track.
 
@@ -144,7 +178,7 @@ A separate `GeometryFrame::hierarchical` preset splits failed parent circles
 into source-informed children on variable integer supports, then refits adjacent
 children into one checked circle or line. `prepare_spectrum` reuses those models
 at arbitrary frequencies, with optional sampling zoom and Hann weighting.
-`adaptive_faft::AdaptiveSpectrum` returns a variable list of relevant peaks,
+`adaptive_faft::AdaptiveSpectrum` (sampled-predictor control) returns a variable list of relevant peaks,
 with separate depth, query-budget, frequency-width, relevance, and merging limits.
 The arithmetic rotation kernel prepares circle roots once; it uses finite sums,
 not integrals or an FFT. Flatness pruning is a reported heuristic and can miss
@@ -167,21 +201,22 @@ fn main() -> Result<(), sinwhisky::Error> {
 }
 ```
 
-The earlier **FFT-based FAFT control** uses rotating phasor circles and their real
-projections. `faft::transform` is a dependency-free radix-2 FFT (O(N log N));
-`faft::FaftFrame` then chooses constant/line baselines, retained circles, per-circle
+The **FFT phasor control** (the first prototype once called FAFT; module renamed
+from `faft`) uses rotating phasor circles and their real projections.
+`phasor_fft::transform` is a dependency-free radix-2 FFT (O(N log N));
+`phasor_fft::PhasorFrame` then chooses constant/line baselines, retained circles, per-circle
 precision, and optional shorter child supports. A straight line is represented
 explicitly as a zero-curvature limit, never an infinite floating-point radius.
 The full tree search is O(N log² N); accepted reconstructions meet the requested
 sample-domain RMS bound. This is a model optimization built on an FFT, not a
 claim to beat FFT or find the global fewest circles. Estimated model bits are
-not an encoded bitrate. See the [FAFT measurements and rotating-circle GIF](docs/COMPRESSION.md#faft-fast-rotating-circles-with-model-optimization).
+not an encoded bitrate. See the [phasor measurements and rotating-circle GIF](docs/COMPRESSION.md#fft-phasor-control-earlier-faft-prototype).
 
 ```rust
-use sinwhisky::faft::{FaftFrame, FaftParams};
+use sinwhisky::phasor_fft::{PhasorFrame, PhasorParams};
 fn main() -> Result<(), sinwhisky::Error> {
     let samples: Vec<f64> = (0..256).map(|i| (i as f64 * 0.2).sin()).collect();
-    let frame = FaftFrame::new(&samples, FaftParams {
+    let frame = PhasorFrame::new(&samples, PhasorParams {
         max_rmse: 0.01, min_block: 32,
     })?;
     let decoded = frame.decode()?; // No source samples required.
@@ -203,10 +238,12 @@ Subdividing a parent circle alone cannot predict unknown error; source-informed 
 or residual information are required.
 
 ```sh
-cargo test --offline --test spectral --test aft --test faft --test geometric_faft --test adaptive_faft
+cargo test --offline --test faft --test spectral --test aft --test phasor_fft --test geometric_faft --test adaptive_faft
+# Optional: Python + NumPy + Cargo; a PCM16 WAV input needs no FFmpeg.
+python3 tools/faft_compare.py /path/to/music.wav /tmp/faft-trial
 # Optional: Python + NumPy + Matplotlib + Pillow + FFmpeg.
 python3 tools/aft_compare.py /path/to/music.mp3 /tmp/aft-trial
-python3 tools/faft_compare.py /path/to/music.mp3 /tmp/faft-trial
+python3 tools/phasor_compare.py /path/to/music.mp3 /tmp/phasor-trial
 python3 tools/geometric_compare.py /path/to/music.mp3 /tmp/geometric-trial
 python3 tools/adaptive_compare.py /path/to/music.mp3 /tmp/adaptive-trial
 # Optional: Python + NumPy + FFmpeg. Output must be new, outside the repository.
