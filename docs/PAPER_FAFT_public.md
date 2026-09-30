@@ -33,11 +33,16 @@ relevant peaks in 1.4–10.9 ms. The method is not claimed to replace the FFT fo
 a complete fixed-bin spectrum, and the angular rates of individual fitted arcs
 must not be interpreted as physical signal frequencies.
 
-![SinWhiskhy](figures/sinusoids-circle.png)
+![SinWhisky](figures/sinusoids-circle.png)
 
 ---
 
 ## 1. Introduction
+
+Let $N$ be the number of source samples, $k$ an integer frequency-bin index,
+$t$ continuous time measured in source-sample intervals, and $i$ the imaginary
+unit ($i^2=-1$). The query angular frequency $\omega$ is measured in radians per
+source sample.
 
 The $N$-point discrete Fourier transform (DFT), and therefore the usual FFT
 implementation of it, returns coefficients on the grid $2\pi k/N$ [1]. Values
@@ -79,8 +84,10 @@ reports measurements and Section 8 discusses limitations.
 
 ### 2.1 Circle determination and aperture
 
-Let $P_j=(x_j,y_j)$, $j=0,1,2$, be three points that are not collinear. The
-centre $C=(c_x,c_y)$ of the unique circle through them solves
+Let $P_j=(x_j,y_j)$, $j=0,1,2$, be three points that are not collinear, with
+horizontal coordinates $x_j$ and amplitudes $y_j$. Write $C=(c_x,c_y)$ for the
+circle centre, $r$ for its radius, and $\lVert\cdot\rVert$ for Euclidean distance.
+The centre of the unique circle through the points solves
 
 $$
 \begin{pmatrix} 2(x_1-x_0) & 2(y_1-y_0)\\ 2(x_2-x_1) & 2(y_2-y_1)\end{pmatrix}
@@ -97,7 +104,8 @@ The horizontal coordinate is sample time multiplied by an *aperture* $\alpha$. T
 aperture controls the relative scale of the horizontal and vertical coordinates
 and therefore changes the curvature and angular rate of the fitted circle. For
 the elementary construction from three consecutive samples
-$y_0,y_1,y_2$, a data-adaptive choice is
+$y_0,y_1,y_2$, denote their aperture by $\alpha_{\mathrm{triplet}}$. A
+data-adaptive choice is
 
 $$
 \alpha_{\mathrm{triplet}}
@@ -113,9 +121,11 @@ $$
 
 A flat or collinear triplet is handled by the line limit. The AFT derivation
 below does **not** depend on this particular aperture rule: it only requires the
-final fitted geometry to be known. For a more general support of $L$ source
-samples starting at sample $a$, with an interior anchor at $a+m$ and any
-declared positive aperture $\alpha$, we use
+final fitted geometry to be known. For a more general support, let $x[n]$ denote
+the source amplitude at integer sample index $n$ (distinct from the horizontal
+point coordinate $x_j$). Let $a$ be the starting sample index, $L>0$ the support
+length in source-sample intervals, and $m$ the interior anchor offset, with
+$0<m<L$. With any declared positive aperture $\alpha$, we use
 
 $$
 P_0=(0,\,x[a]),\quad P_1=(m\alpha,\,x[a+m]),\quad P_2=(L\alpha,\,x[a+L]).
@@ -127,11 +137,14 @@ parameters.
 
 ### 2.2 Equal-angle traversal
 
-Let $\theta_j=\operatorname{atan2}(y_j-c_y,\,x_j-c_x)$, unwrapped in the
+Let $\theta_j$ be the angle of the radius from $C$ to $P_j$, computed as
+$\theta_j=\operatorname{atan2}(y_j-c_y,\,x_j-c_x)$ and unwrapped in the
 direction that visits $P_1$ between $P_0$ and $P_2$. The defining interpolation
 rule is **equal-angle traversal**. Angle, rather than Cartesian $x$, changes
-linearly with the source-sample coordinate. On the first side of the interior
-anchor, $0\le u<m$, and on the second, $0\le u<L-m$:
+linearly with the source-sample coordinate. Here $u$ is time measured from the
+start of each side, $y(u)$ is its interpolated amplitude, and $\beta_1$ and
+$\beta_2$ are the angular rates on the first and second sides. On the first
+side of the interior anchor, $0\le u<m$, and on the second, $0\le u<L-m$:
 
 $$
 y(u)=c_y+r\sin(\theta_0+\beta_1 u),\qquad
@@ -150,7 +163,10 @@ Each side is a **rotation**: the vertical projection of a vector of length $r$
 turning at $\beta$ radians per source sample around a centre at height $c_y$.
 
 **Definition 1 (rotation).** A rotation is a tuple $(s,L,c,r,\varphi,\beta,d)$
-with support $[s,s+L)$, $L>0$, and
+with support $[s,s+L)$, $L>0$. Here $s$ is its starting source-sample position,
+$L$ its duration, $c$ the vertical centre, $r$ the radius, $\varphi$ the angle
+at the start, $\beta$ the angular rate, and $d$ a linear amplitude slope per
+source-sample interval. At position $t$, its amplitude is
 
 $$
 y(t)=c+r\sin\bigl(\varphi+\beta\,(t-s)\bigr)+d\,(t-s),
@@ -164,8 +180,9 @@ Circular arcs have $d=0$; straight-line pieces have $r=0$.
 A simple dense-resampling construction can fit one circle to every consecutive
 triplet, evaluate each circle by the equal-angle rule, and blend overlapping
 predictions with a smooth sine weight. If $z$ new samples are inserted between
-adjacent source samples and $q=z+1$, a triplet produces $2q+1$ local values. One
-finite-support blending rule is
+adjacent source samples and $q=z+1$, a triplet produces $2q+1$ local values.
+Let $j$ index those local values and $w_j$ be the weight of the $j$-th
+prediction. One finite-support blending rule is
 
 $$
 w_j=\sin\!\left(\frac{\pi(j+1)}{2q+2}\right),
@@ -198,28 +215,34 @@ physical frequency of the recorded signal (Section 8).
 ### 3.1 Definition
 
 **Definition 3 (AFT).** Let $y$ be a circle curve, $[p,q)\subseteq[0,N)$ a
-window of duration $T=q-p$, and $w$ a weight on $[p,q)$. The Angular Fourier
-Transform of $y$ at a real angular frequency $\omega$ (radians per source
-sample) is
+window with start $p$, end $q$, and duration $T=q-p$, and $w(t)$ a real window
+weight. Here $q$ denotes the window endpoint, rather than the dense-sampling
+count used in Section 2.3. The phase factor $e^{-i\omega(t-p)}$ uses $p$ as its
+time origin. The complex coefficient $\mathcal A[y](\omega)$ of the Angular
+Fourier Transform at real angular frequency $\omega$ is
 
 $$
 \mathcal A[y](\omega)=\int_p^q y(t)\,w(t)\,e^{-i\omega (t-p)}\,dt .
 $$
 
-If the source sampling rate is $F_s$ samples/s, the corresponding physical
-frequency is $f=\omega F_s/(2\pi)$ Hz. We use $w\equiv1$ (rectangular) or the
+Let $F_s$ be the source sampling rate in samples/s and $f$ the physical
+frequency in Hz; then $f=\omega F_s/(2\pi)$. We use $w\equiv1$ (rectangular) or the
 continuous periodic Hann window [3],
 $w(t)=\tfrac12-\tfrac12\cos\bigl(2\pi(t-p)/T\bigr)$. The normalized coefficient
-is $\mathcal A/\!\int w$, so a sinusoid of amplitude $A$ has magnitude about $A/2$.
+is $\mathcal A/\!\int_p^q w(t)\,dt$. With $A$ denoting a sinusoid's amplitude,
+its normalized coefficient has magnitude about $A/2$.
 
 Two properties distinguish $\mathcal A$ from the DFT. First, $\omega$ ranges
-over all of $\mathbb R$; there is no grid and no periodicity in $\omega$. Second,
+over all of $\mathbb R$, the set of real numbers; there is no grid and no
+periodicity in $\omega$. Second,
 the transform is that of the continuous curve, including its behaviour between
 samples.
 
 ### 3.2 Closed form
 
-Let
+Let $u$ be local time on a support of duration $L$, $\delta$ a real angular
+frequency offset, and $k$ a nonnegative integer moment order. Define
+$E_k(\delta,L)$ as the complex exponential moment of order $k$:
 
 $$
 E_k(\delta,L)=\int_0^L u^k e^{i\delta u}\,du,\qquad
@@ -227,25 +250,32 @@ E_0(\delta,L)=\frac{e^{i\delta L}-1}{i\delta},\quad
 E_k(\delta,L)=\frac{L^k e^{i\delta L}-k\,E_{k-1}(\delta,L)}{i\delta}\ (\delta\ne0),
 $$
 
-with $E_k(0,L)=L^{k+1}/(k+1)$. We write a rotation in *anchored* form with
-$y_0=y(s)$, $a=r\sin\varphi$ and $b=r\cos\varphi$:
+with $E_k(0,L)=L^{k+1}/(k+1)$; the recurrence applies for $k\ge1$.
+For a rotation starting at $s$, let $y_0=y(s)$ be its start amplitude and
+$a=r\sin\varphi$, $b=r\cos\varphi$ its two projected radius components.
+Here $a$ is an amplitude coefficient, rather than the source index used in
+Section 2.1. With $u=t-s$, the *anchored* form is
 
 $$
 y(s+u)=y_0+a\,(\cos\beta u-1)+b\sin\beta u+d\,u .
 $$
 
 **Proposition 1.** For a rectangular window containing the support of one
-rotation,
+rotation, let $\Phi(\omega)$ be that rotation's Fourier contribution with phase
+origin at its start $s$. In the expression below, $E_k(\delta)$ abbreviates
+$E_k(\delta,L)$ for this rotation's duration:
 
 $$
 \Phi(\omega)=\int_0^L y(s+u)\,e^{-i\omega u}\,du
 = y_0E_0(-\omega)
 +a\Bigl[\tfrac12\bigl(E_0(\beta-\omega)+E_0(-\beta-\omega)\bigr)-E_0(-\omega)\Bigr]
 +\frac{b}{2i}\bigl[E_0(\beta-\omega)-E_0(-\beta-\omega)\bigr]
-+d\,E_1(-\omega),
++d\,E_1(-\omega).
 $$
 
-and for a circle curve,
+For a circle curve, let $\Phi_s$ denote each rotation's local contribution
+(including each stacked rotation), with $s$ its start position. Relative to
+the window origin $p$, the rectangular transform is
 
 $$
 \mathcal A[y](\omega)=\sum_{\text{rotations}} e^{-i\omega (s-p)}\,\Phi_s(\omega).
@@ -253,29 +283,33 @@ $$
 
 *Proof.* Write $\cos\beta u=\tfrac12(e^{i\beta u}+e^{-i\beta u})$ and
 $\sin\beta u=\tfrac1{2i}(e^{i\beta u}-e^{-i\beta u})$. Each resulting term is
-$\int_0^L u^k e^{i(\pm\beta-\omega)u}du=E_k(\pm\beta-\omega)$. Linearity over
-the tiling and the shift $t=s+u$ give the sum. $\square$
+$\int_0^L u^k e^{i(\pm\beta-\omega)u}\,du=E_k(\pm\beta-\omega)$. Linearity over
+the tiling and the shift $t=s+u$ give the sum. *Q.E.D.*
 
 The anchored form keeps the start value $y_0$ separate from the deviation. The
 large and nearly cancelling terms $c$ and $r$ of flat, large-radius arcs never
 appear in the sum.
 
-**Proposition 2 (Hann weighting).** With $\Delta=2\pi/T$ and $\mathcal A_\square$
-the rectangular transform,
+**Proposition 2 (Hann weighting).** Let $\Delta=2\pi/T$ be the angular-frequency
+spacing associated with the window duration, $\mathcal A_{\mathrm{rect}}$ the
+rectangular transform ($w\equiv1$), and $\mathcal A_{\mathrm{Hann}}$ the
+Hann-weighted transform of the same curve on the same window. Then
 
 $$
-\mathcal A_{\text{Hann}}(\omega)=\tfrac12\mathcal A_\square(\omega)
--\tfrac14\mathcal A_\square(\omega-\Delta)-\tfrac14\mathcal A_\square(\omega+\Delta).
+\mathcal A_{\mathrm{Hann}}(\omega)=\tfrac12\mathcal A_{\mathrm{rect}}(\omega)
+-\tfrac14\mathcal A_{\mathrm{rect}}(\omega-\Delta)-\tfrac14\mathcal A_{\mathrm{rect}}(\omega+\Delta).
 $$
 
 *Proof.* $-\tfrac12\cos\Delta(t-p)=-\tfrac14\bigl(e^{i\Delta(t-p)}+e^{-i\Delta(t-p)}\bigr)$
-shifts the frequency by $\mp\Delta$. $\square$
+shifts the frequency by $\mp\Delta$. *Q.E.D.*
 
 The window is therefore applied *after* fitting and exactly. No refit and no
 sampling occur.
 
 **Proposition 3 (derivatives).** With phase origin at the window centre
-$t_c=p+T/2$ and $\sigma=s-t_c$, write $\Psi_k(\omega)=\int_0^L u^k\,y(s+u)\,e^{-i\omega u}du$
+$t_c=p+T/2$, let $\sigma=s-t_c$ be a rotation's start offset from that centre.
+For nonnegative integer order $k$, let $\Psi_k$ be its amplitude-weighted
+Fourier moment, $\Psi_k(\omega)=\int_0^L u^k\,y(s+u)\,e^{-i\omega u}\,du$
 (obtained from Proposition 1 with $E_0\to E_k$ and $E_1\to E_{k+1}$). Then
 
 $$
@@ -284,7 +318,8 @@ $$
 $$
 
 Thus $\mathcal A$, $\mathcal A'$ and $\mathcal A''$ are all closed forms of
-the same rotations.
+the same rotations; primes denote first and second derivatives with respect
+to $\omega$.
 
 ---
 
@@ -296,19 +331,25 @@ samples, divided by $z$, is sometimes used as an approximation to the spectrum
 of the fitted curve. It is not the AFT.
 
 **Proposition 4.** Let $g(t)=y(t)w(t)$ on $[p,q)$, zero elsewhere, with $w$ the
-Hann window. Let $g$ have finitely many value jumps $J_j$ at join points
-$t_j$ on the grid, and samples taken from the right. Then
+Hann window. Let $y$ have finitely many value jumps at join points $t_j$ on
+the sampling grid, indexed by $j$, and define
+$J_j=y(t_j^+)-y(t_j^-)$ as the right-minus-left jump of the unweighted curve.
+The corresponding jump of $g$ is $J_jw(t_j)$. Let $z$ now denote the positive
+integer number of samples per source interval (rather than the number of
+inserted samples in Section 2.3), $n$ an integer sample index, and $m$ an integer
+spectral-image index. With samples taken from the right, and $\mathbb Z$ denoting
+all integers, the relation is
 
 $$
 \frac1z\sum_{n}g\!\left(p+\tfrac nz\right)e^{-i\omega n/z}
-=\sum_{m\in\mathbb Z}\mathcal A_{\text{Hann}}[y]\bigl(\omega+2\pi z m\bigr)
+=\sum_{m\in\mathbb Z}\mathcal A_{\mathrm{Hann}}[y]\bigl(\omega+2\pi z m\bigr)
 +\frac1z\sum_j \tfrac12 J_j\,w(t_j)\,e^{-i\omega(t_j-p)} .
 $$
 
 *Proof.* The Poisson summation formula for a piecewise smooth, compactly
 supported function applies. Its sampled side uses the mid-value
 $\tfrac12(g(t^-)+g(t^+))$ at each jump; right-sided sampling adds
-$\tfrac12J_j$. $\square$
+$\tfrac12J_jw(t_j)$. *Q.E.D.*
 
 The zoomed spectrum is therefore the AFT plus **images** at multiples of
 $2\pi z$, plus join terms. At $z=1$ the band above the source Nyquist is a
@@ -337,9 +378,13 @@ is a linear recurrence over fitted rotations, not a radix decomposition. Its
 phase factors are determined by the circle geometry and by an arbitrary real
 query frequency $\omega$, rather than by a fixed set of $N$-th roots of unity.
 
-Let $q=e^{-i\omega}$. For consecutive rotations, $e^{-i\omega s_{k+1}}=e^{-i\omega s_k}q^{L_k}$,
+In this subsection and Algorithm 2, let $q=e^{-i\omega}$ denote the complex
+phase advance per source interval; it is distinct from the window endpoint.
+Let $k$ index consecutive supports, with start $s_k$ and duration $L_k$.
+For consecutive rotations, $e^{-i\omega s_{k+1}}=e^{-i\omega s_k}q^{L_k}$,
 so support phases are *chained* by multiplication. The terms
-$e^{i(\pm\beta-\omega)L}$ in $E_0$ factor as
+$e^{i(\pm\beta-\omega)L}$ in $E_0$ factor as follows, where the overline denotes
+complex conjugation:
 
 $$
 e^{i(\beta-\omega)L}=\underbrace{e^{i\beta L}}_{\text{prepared once}}\;q^{L},
@@ -354,9 +399,13 @@ real divisions ($1/(\beta-\omega)$ and $1/(-\beta-\omega)$).
 
 ### 5.2 Numerical stability
 
-When $|x|=|\delta L|$ is small (near DC or resonance, $\omega\approx\pm\beta$),
+Let $x=\delta L$ be the dimensionless accumulated frequency offset on a support,
+and $\varepsilon$ the floating-point machine precision. Here $x$ is a scalar
+phase offset, distinct from the source sequence $x[n]$ in Section 2.1. When
+$|x|$ is small (near DC or resonance, $\omega\approx\pm\beta$),
 the ratio $(e^{ix}-1)/(i\delta)$ cancels. For $|x|$ below a threshold (0.05 for
-values, 0.5 for derivatives), the implementation evaluates
+values, 0.5 for derivatives), the implementation evaluates the following series,
+where $n$ is a nonnegative integer term index and $n!$ is its factorial:
 
 $$
 E_k(\delta,L)=L^{k+1}\sum_{n\ge0}\frac{(ix)^n}{n!\,(n+k+1)}
@@ -367,6 +416,15 @@ ratio and recurrence lose at most about $\varepsilon/|x|^{k+1}$. Phases chained
 by multiplication are re-anchored with an exact $\sin/\cos$ every 64 supports.
 
 ### 5.3 Algorithms
+
+In the pseudocode, $o$ is the crop offset from the original rotation start,
+$s'$ and $L'$ are the cropped start and duration, and `turn` is the prepared
+complex angular advance over that duration. In Algorithm 2, $Q[L]$ stores the
+phase advance over duration $L$, $S$ accumulates the transform, `phase` locates
+the current support relative to the window start, and $e_{\mathrm{dc}},e_+,e_-$
+are exponential moments at $-\omega,\beta-\omega,-\beta-\omega$, respectively.
+`conj` denotes complex conjugation. $R$ is the number of rotations in the
+prepared window and $K$ the number of queried frequencies.
 
 ```text
 Algorithm 1  PREPARE(curve, window [p,q), weighting)
@@ -416,14 +474,23 @@ real numbers, not $N/2+1$ bins.
 The resolution of the transform is set by the window *duration*, $2\pi/T$, not by
 the number of samples. A zoomed curve has the same $T$ and therefore the same
 resolution. Seeds are taken on a grid of spacing $2\pi/(T\rho)$ with density
-$\rho$ (default 2). Each seed is refined by Newton's method on
-$g(\omega)=|\mathcal A(\omega)|^2$, using Proposition 3:
+$\rho>0$ (default 2), the number of seed spacings per interval of width
+$2\pi/T$. Each seed is refined by Newton's method on the power
+$g(\omega)=|\mathcal A(\omega)|^2$. Here $g$ is spectral power, distinct from
+the time-domain function in Proposition 4; primes denote frequency derivatives,
+$|\cdot|$ complex magnitude, and $\mathrm{Re}$ the real part. Using Proposition 3:
 
 $$
 g'=2\,\mathrm{Re}\bigl(\overline{\mathcal A}\,\mathcal A'\bigr),\qquad
 g''=2\bigl(|\mathcal A'|^2+\mathrm{Re}(\overline{\mathcal A}\,\mathcal A'')\bigr),\qquad
 \omega\leftarrow\omega-\frac{g'}{g''}\quad(g''<0).
 $$
+
+In Algorithm 4, $\omega_{\mathrm{lo}}$ and $\omega_{\mathrm{hi}}$ bound the search band,
+$j$ indexes scan frequencies, `floor` is the minimum accepted magnitude, and
+`lo` and `hi` bracket a candidate peak. $A,A',A''$ are the transform and its
+frequency derivatives, $g_1,g_2$ the first and second power derivatives, and
+$\omega_{\mathrm{new}}$ the proposed next query frequency.
 
 ```text
 Algorithm 4  PEAKS(prepared, [ω_lo, ω_hi], ρ, floor)
