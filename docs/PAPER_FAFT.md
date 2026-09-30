@@ -1,4 +1,4 @@
-# The Angular Fourier Transform for obtaining a Continuous Spectrum and its Fast Evaluation
+# The Angular Fourier Transform for obtaining a Continuous Spectrum and its fast evaluation
 
 **Riccardo Cecchini** — riccardo.cecchini594@edu.unito.it (and someone else)
 
