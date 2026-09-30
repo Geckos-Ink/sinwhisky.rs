@@ -25,6 +25,10 @@ See [design and provenance](docs/DESIGN.md), the included
 [2014 whitepaper](<docs/SinWhisky e FLT.pdf>), and the
 [agent reference](AGENTS.md).
 
+The [public FAFT manuscript](docs/PAPER_FAFT_public.md) also has an
+[inline-image version](docs/PAPER_FAFT_public-inline.md), with embedded SVG markup
+and a PNG data URI for sharing without separate figure files.
+
 ## Build and try
 
 Requires Rust with Cargo. Verified with Rust 1.98.1 on macOS arm64; other targets

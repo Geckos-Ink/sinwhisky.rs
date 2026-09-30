@@ -389,6 +389,14 @@ Paper-style presentation by Riccardo Cecchini: AFT definition, closed forms,
 Poisson/zoom proposition, FAFT pseudocode, peak refinement, and results copied
 from the FAFT snapshot. Keep its numbers and claims synchronized with FAFT.md.
 
+### [docs/PAPER_FAFT_public.md](docs/PAPER_FAFT_public.md) and [inline-image version](docs/PAPER_FAFT_public-inline.md)
+
+Public FAFT manuscript and its self-contained image variant. Keep the prose and
+captions identical. The inline version embeds the original PNG as a data URI and
+the three SVG figures as HTML markup with unique IDs and responsive sizing.
+Refresh embedded figures when the public manuscript or its source figures change.
+Rendering requires a Markdown renderer that supports inline SVG and data URIs.
+
 ### [docs/COMPRESSION.md](docs/COMPRESSION.md)
 
 Opens by pointing to FAFT.md and labels its FAFT-named sections as controls.

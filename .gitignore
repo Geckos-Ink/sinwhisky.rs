@@ -24,3 +24,4 @@ target
 __pycache__/
 *.py[cod]
 .DS_Store
+docs/PAPER_FAFT_public-inline.md
