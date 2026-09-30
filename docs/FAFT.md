@@ -6,7 +6,8 @@ crate. It is implemented in [src/faft.rs](../src/faft.rs), tested in
 [examples/faft_bench.rs](../examples/faft_bench.rs) and
 [tools/faft_compare.py](../tools/faft_compare.py). The earlier experiments in
 [COMPRESSION.md](COMPRESSION.md) remain as controls. This page says which of them
-are, and are not, the transform.
+are, and are not, the transform. A paper-style mathematical presentation is in
+[PAPER_FAFT.md](PAPER_FAFT.md).
 
 ## Three things that were mixed together
 

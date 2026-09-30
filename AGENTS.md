@@ -383,6 +383,12 @@ closed forms and rotate-and-add rule, numerics, peak policy, circle-reference
 findings, the renamed control, measured Beethoven results and reproduction. Update
 it with any `faft` behaviour or measurement change; numbers only from actual runs.
 
+### [docs/PAPER_FAFT.md](docs/PAPER_FAFT.md)
+
+Paper-style presentation by Riccardo Cecchini: AFT definition, closed forms,
+Poisson/zoom proposition, FAFT pseudocode, peak refinement, and results copied
+from the FAFT snapshot. Keep its numbers and claims synchronized with FAFT.md.
+
 ### [docs/COMPRESSION.md](docs/COMPRESSION.md)
 
 Opens by pointing to FAFT.md and labels its FAFT-named sections as controls.
