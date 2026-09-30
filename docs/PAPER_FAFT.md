@@ -1,7 +1,8 @@
 # The Angular Fourier Transform for obtaining a Continuous Spectrum and its Fast Evaluation
 
-**Riccardo Cecchini** — dev@lizard.ink
-*September 2026*
+**Riccardo Cecchini** — riccardo.cecchini594@edu.unito.it (and someone else)
+
+*30 September 2026*
 
 ---
 
