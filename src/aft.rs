@@ -1,3 +1,4 @@
+//! Reference preset: analytic integration retained for continuous-model checks.
 //! Experimental Angular Fourier Transform of a periodic angular interpolant.
 //!
 //! This is a continuous Fourier integral, not another algorithm for the DFT.

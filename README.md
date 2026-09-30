@@ -129,21 +129,73 @@ controls. Its experimental SWR1 streams are decoded independently and checked
 against PCM16 error bounds; this is not a stable audio format or a quality claim.
 The resampler's contracts and dependencies are unchanged.
 
+The current **geometry-first FAFT** fits circles through waveform points, then
+retrieves the predicted sound's spectrum from retained centers, radii, and angular
+phases using finite geometric sums. `geometric_faft::GeometryFrame` searches point
+spacing, interior phase, aperture, and per-circle parameter precision, checking a
+maximum source-sample error bound. `dtft` and `hann_dtft` query time-local windows
+without another fit; `spectrum_rotations` computes a whole grid using batched
+rotations. No FFT or integral is used in that path. Full query cost is O(PK), with
+P retained angular/line pieces and K frequencies. The [geometry experiments](docs/COMPRESSION.md#geometry-first-faft-waveform-circles-to-spectrum)
+compare point banks, precision, phase, zoom, actual MP3 bitrate controls, and two
+implementation attempts on the supplied Beethoven track.
+
+```rust
+use sinwhisky::geometric_faft::{GeometryFrame, GeometryParams};
+fn main() -> Result<(), sinwhisky::Error> {
+    let samples: Vec<f64> = (0..256).map(|i| (i as f64 * 0.2).sin()).collect();
+    let geometry = GeometryFrame::new(&samples, GeometryParams {
+        max_error: 0.01, ..GeometryParams::default()
+    })?;
+    let local = geometry.hann_dtft(0.2, 64..192)?;
+    let spectrum = geometry.spectrum_rotations(1)?;
+    assert!(geometry.stats().max_error <= 0.01);
+    assert!(local.re.is_finite() && spectrum.len() == 129);
+    Ok(())
+}
+```
+
+The earlier **FFT-based FAFT control** uses rotating phasor circles and their real
+projections. `faft::transform` is a dependency-free radix-2 FFT (O(N log N));
+`faft::FaftFrame` then chooses constant/line baselines, retained circles, per-circle
+precision, and optional shorter child supports. A straight line is represented
+explicitly as a zero-curvature limit, never an infinite floating-point radius.
+The full tree search is O(N log² N); accepted reconstructions meet the requested
+sample-domain RMS bound. This is a model optimization built on an FFT, not a
+claim to beat FFT or find the global fewest circles. Estimated model bits are
+not an encoded bitrate. See the [FAFT measurements and rotating-circle GIF](docs/COMPRESSION.md#faft-fast-rotating-circles-with-model-optimization).
+
+```rust
+use sinwhisky::faft::{FaftFrame, FaftParams};
+fn main() -> Result<(), sinwhisky::Error> {
+    let samples: Vec<f64> = (0..256).map(|i| (i as f64 * 0.2).sin()).collect();
+    let frame = FaftFrame::new(&samples, FaftParams {
+        max_rmse: 0.01, min_block: 32,
+    })?;
+    let decoded = frame.decode()?; // No source samples required.
+    assert_eq!(decoded.len(), samples.len());
+    assert!(frame.stats().rmse <= 0.01);
+    Ok(())
+}
+```
+
 The Rust `spectral` module also computes analytic transforms of equal-angle arcs,
 numerical transforms of uniform-x arcs, and DFT bins directly from retained frame
 predictors. `aft::AngularFrame` extends this to a complete periodic angular
 interpolant: prepare geometry once, evaluate it at fractional positions, and
-integrate its spectrum analytically. This experimental **AFT** is a continuous
+integrate its spectrum analytically. This retained **AFT reference preset** is a continuous
 Fourier integral, distinct from the sampled DFT; its current full spectrum takes
-O(N²). The [AFT/FFT benchmark](docs/COMPRESSION.md#angular-fourier-transform-aft-current-benchmark)
+O(N²). The [AFT/FFT benchmark](docs/COMPRESSION.md#angular-fourier-transform-aft-reference-preset-benchmark)
 includes measured Beethoven spectra, spectrograms, runtime plots, and a GIF.
 Subdividing a parent circle alone cannot predict unknown error; source-informed child models
 or residual information are required.
 
 ```sh
-cargo test --offline --test spectral --test aft
+cargo test --offline --test spectral --test aft --test faft --test geometric_faft
 # Optional: Python + NumPy + Matplotlib + Pillow + FFmpeg.
 python3 tools/aft_compare.py /path/to/music.mp3 /tmp/aft-trial
+python3 tools/faft_compare.py /path/to/music.mp3 /tmp/faft-trial
+python3 tools/geometric_compare.py /path/to/music.mp3 /tmp/geometric-trial
 # Optional: Python + NumPy + FFmpeg. Output must be new, outside the repository.
 python3 tools/compression_lab.py /path/to/music.mp3 /tmp/compression-trial \
   --starts 60 180 300 --seconds 1 --tolerances 0 16 128

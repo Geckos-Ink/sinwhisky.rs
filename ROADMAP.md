@@ -20,18 +20,33 @@
   evaluation, independent of the existing resampler's blending policy.
 - AFT/FFT benchmarks on 513 Beethoven windows, numeric integration checks,
   frequency/phase differences, scaling plots, spectrograms, and animated spectra.
+- FAFT rotating-circle experiment: radix-2 forward/inverse transforms, dyadic
+  constant/line/circle model selection, zero-curvature line limits, per-circle
+  precision, and verified RMS budgets. Integral AFT retained as a reference preset.
+- FAFT comparison across 513 Beethoven windows and 3,078 checked reconstructions,
+  root/tree controls, runtime scaling, precision graphs, and an epicycle GIF.
+- Geometry-first FAFT: circumcircles from waveform points, optimized coverage,
+  dynamic geometry precision, source peak-error bounds, direct finite spectral
+  sums, batched roots, cropped Hann queries, and zoomed model spectra.
+- Nine point/phase/precision policies across 63 Beethoven windows, two fitting
+  attempts, independent spectrum checks, omitted-point diagnostics, 80/160 kbps
+  MP3 controls, plots, and an animation of an actual waveform circle.
 
-## Current focus: angular Fourier transform
+## Current focus: geometry-first FAFT
 
-1. Improve conditioning for almost-flat arcs and extreme radii, with independent
-   numerical checks; do not confuse a waveform change with integration error.
-2. Profile and reduce the O(N²) full-spectrum cost, including cached kernels,
-   phase recurrences, selected-frequency queries, and approximation error budgets.
-3. Compare against dense-sampling FFTs of the same angular curve at matched
-   numerical error. The present native FFT benchmark computes a different target.
-4. Broaden signal/scale coverage and study periodic boundaries, alternative arc
-   joins, explicit continuous windowing, and a separately specified inverse.
-   No improved frequency resolution or recovered high-frequency claim is established.
+1. Prune point/phase candidates using justified prediction bounds; fitting is now
+   the dominant cost. Measure reuse across neighboring time windows.
+2. Study shared circle parameters, parent/child deltas and residual circles.
+   Current source-informed supports replace one another on a coverage path.
+3. Define an objective that also constrains spectral phase/band errors: a source
+   sample-error limit alone allows changes in quiet spectral bins.
+4. Compare selected-frequency/window queries with matched FFT/Goertzel methods,
+   group compatible angular rates, and track recurrence conditioning and cost.
+   Current whole-grid geometric work is O(PK), not a universal FFT acceleration.
+5. Test adaptive per-field precision, a bounded wire format with measured bytes,
+   continuity/overlap, broader audio, and prediction from truly omitted points.
+6. Keep the integral AFT and FFT-based phasor control as references. Their model
+   definitions differ; zooming a predictor does not recover missing observations.
 
 ## Next: establish quality and cost
 
@@ -45,9 +60,10 @@
 
 ## Further codec experiments
 
-1. Quantize circle geometry (currently float64) and **remeasure decoded error**,
-   including branch/extent changes. Compare coarse parent fits against the tested
-   extrapolation of local-triplet circles; keep refitting explicitly separate.
+1. Encode the rounded geometry in an actual bounded wire format and **remeasure
+   decoded error**. Geometry-first FAFT already tests parameter rounding; extend
+   that study to the uniform predictor's branch/extent changes. Compare coarse
+   parent fits with local-triplet extrapolation, keeping refitting explicit.
 2. Improve the experimental residual coder and global byte search; measure larger
    blocks, delta-coded child parameters, and sparse Fourier residual budgets.
    Residual/raw trials exist; they do not yet establish a circle-specific advantage.

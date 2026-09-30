@@ -13,6 +13,8 @@
 pub mod aft;
 pub mod analysis;
 pub mod codec;
+pub mod faft;
+pub mod geometric_faft;
 pub mod geometry;
 pub mod resample;
 pub mod spectral;

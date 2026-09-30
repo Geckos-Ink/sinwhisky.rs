@@ -110,7 +110,7 @@ a serialization of `ResearchFrame` and carries no stable compatibility promise.
 Full framing, models, and residuals count toward byte measurements. The Rust core
 remains dependency-free; no audio data or Python packages enter Cargo.
 
-## Periodic angular Fourier model
+## Periodic angular Fourier model (reference preset)
 
 `aft::AngularFrame` defines a separate continuous interpolation policy for AFT.
 It fits `Analysis` once with periodic source halos and the caller's explicit
@@ -133,9 +133,86 @@ The integral is linear in an already-fixed waveform. The process of fitting that
 waveform from samples is generally nonlinear, so AFT is not an alternative DFT
 algorithm or an established inverse transform. The continuous coefficient at
 Nyquist need not be real. Do not feed these coefficients to a discrete inverse
-FFT and assume exact reconstruction. The [current comparison](COMPRESSION.md#angular-fourier-transform-aft-current-benchmark)
+FFT and assume exact reconstruction. The [current comparison](COMPRESSION.md#angular-fourier-transform-aft-reference-preset-benchmark)
 uses identical periodic-Hann-windowed samples, a linear-interpolation control,
 and a dense midpoint-FFT check with the required integration weight/phase.
+
+## FFT-based FAFT control
+
+`faft::transform` computes the sampled DFT through radix-2 rotations. This is a
+conventional FFT kernel. `FaftFrame` adds a separate dyadic model search: local
+constant or endpoint-line baseline, energy-ranked Fourier circles, and dynamic
+Cartesian precision per circle. Parent and child supports compete; chosen leaves
+partition the input. Child circles are source-informed replacements, not residual
+predictions obtained from the parent. Fitted triplet `Analysis` geometry is neither
+mutated nor used as a surrogate for phasor coefficients.
+
+`LineLimit` stores affine endpoints as the stable zero-curvature limit of a
+geometric circle. It does not encode an infinite radius. A zero-frequency phasor
+is a constant and cannot replace a nonconstant line. Tests check collinearity,
+near-line acceptance, and convergence of the rationalized large-radius sagitta.
+
+Frames require a power-of-two length ≥2 and positive finite RMS tolerance.
+Internal normalization keeps coefficient arithmetic away from amplitude overflow.
+The optimizer counts each baseline plus each rotating circle, breaking ties using
+an explicit hypothetical model-bit cost. It minimizes that objective within the
+generated candidates and equal per-leaf budgets, not across arbitrary frequencies
+or all quantizations. Quantization uses per-circle binary exponents and signed
+2–30-bit components, with an f64 escape. Every accepted leaf and the final rescaled
+decode are checked; impossible precision budgets return errors. No source PCM is
+retained. Fast decode uses inverse rotations; fractional `evaluate` sums projections
+on the selected support and may be discontinuous at child joins. The sampled RMS
+bound does not imply a maximum or intersample error bound.
+
+The core transform is O(N log N); the full dyadic search is O(N log² N).
+`estimated_model_bits` is a selection metric, not measured storage. There is no
+FAFT serializer or new resampling mode. The integral `AngularFrame` remains
+unchanged as a reference preset with a different continuous transform target.
+The [FAFT experiment](COMPRESSION.md#faft-fast-rotating-circles-with-model-optimization)
+records definitions, error accounting, runtime boundaries, and actual comparisons.
+
+## Geometry-first FAFT
+
+`geometric_faft::GeometryFrame` fits independent time/amplitude circumcircles
+through selected waveform points, then retains centers, radii, local x scale,
+three unwrapped angles, and coverage. Its predictions advance equal angles on
+each side of the fitting middle point. Fitting searches dyadic spans, midpoint
+fractions, aperture gains, and significand widths. It does not obtain models from
+FFT coefficients or mutate the resampler's Analysis. The terminal source anchor
+is sample 0, specifying periodic coverage on `[0,N)`.
+
+Every accepted descriptor checks all source samples plus its terminal anchor;
+rounded circle fields also check the three horizontal anchors in scaled
+coordinates. The final decoded maximum error is measured in original amplitude
+units, so normalization cannot hide unrepresentable small components. RMS uses
+scaled hypot accumulation of absolute errors. Extremely flat/ill-conditioned
+circles remain finite endpoint lines or shorter candidates. There is no guaranteed
+fractional-position or perceptual error bound. Model data are private and exposed
+through immutable descriptor views, with no source PCM retained.
+
+Dynamic programming minimizes descriptor count, then hypothetical model bits,
+within the actual candidate bank. Default prevalidation rejects nominal geometry
+that fails before quantization; the exhaustive control admits quantized variants
+of those failures. Neither policy finds the global fewest arbitrary circles.
+Circles have independent significand widths and per-field floating exponents;
+there is no wire format or measured circle bitrate.
+
+Prepared angular halves use finite exponential sums and line first moments to
+compute the sampled predictor's spectrum. `dtft` can crop any retained support;
+`hann_dtft` combines three shifted queries to weight that same predictor without
+refitting. Batch rotations reuse frequency-grid roots, with stable near-resonance
+limits and periodic reanchoring. No FFT or integration occurs in this module.
+Whole-spectrum cost is O(PK), and can be quadratic when many pieces are required.
+Zoom changes the density at which the SAME geometric function is sampled and
+restores scale with a `1/zoom` normalization; it cannot add observations.
+
+The [direct geometry experiments](COMPRESSION.md#geometry-first-faft-waveform-circles-to-spectrum)
+measure error against the source separately from numerical retrieval error,
+compare different point/phase/precision banks and two implementation attempts,
+and test omitted points, zoom, and encoded MP3 bitrate controls. Spectra at a
+certain source time are finite-window queries, not an intrinsic single-sample
+frequency decomposition. The FFT-based control and integral AFT reference remain
+available with their earlier public contracts.
 
 ## Scope boundaries
 

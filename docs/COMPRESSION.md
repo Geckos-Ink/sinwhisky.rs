@@ -1,14 +1,499 @@
 # Angular Fourier and circle compression experiments
 
-The current focus is Fourier analysis through angular circle functions. The
-AFT/FFT comparison below extends the earlier single-arc integrals to complete
-frames and records actual measurements from the supplied Beethoven track.
-The earlier compression lab remains documented below as a separate experiment.
-Neither path implements FLT or establishes recovery of missing source information.
+The current focus is FAFT from circles fitted through waveform points. The direct
+geometry method below precedes the earlier FFT-based control, integral reference
+preset, and compression experiment.
 
-## Angular Fourier Transform (AFT): current benchmark
+## Geometry-first FAFT: waveform circles to spectrum
 
-The 2026-09-30 implementation now computes a complete frame spectrum from angular
+This is the current direction, following the distinction between fitting circles
+through **waveform points** and finding rotating phasors through an FFT. The
+pipeline is now:
+
+```text
+waveform points → circumcircle centers/radii/angular endpoints
+                → tested coverage + per-circle precision
+                → finite geometric sums → time-local spectrum
+```
+
+[src/geometric_faft.rs](../src/geometric_faft.rs) provides `GeometryFrame`,
+`GeometryParams`, retained `WaveCircle` descriptors, `evaluate`, `decode`,
+`dtft`, `hann_dtft`, `spectrum_closed`, and `spectrum_rotations`.
+There is **no FFT, numerical integration, or spectral fitting** in this path.
+The earlier `faft::FaftFrame` remains an FFT-based control; `AngularFrame`
+remains the integral reference preset. All three have distinct model definitions.
+
+### What is fitted and optimized
+
+A candidate uses the source values at its first, interior, and terminal points.
+It fits an actual circumcircle using `Circle::through`, retains center `(cx,cy)`,
+radius, local x scale, and the three unwrapped angles, then predicts amplitudes
+with equal angular progress on each side of the interior point. The interval
+lengths tried are 1, 2, 4, …, `max_span` (2..256). Circle candidates require at
+least two intervals; one interval is always available as a finite endpoint line.
+The terminal anchor at N is source sample 0, explicitly closing the period.
+The accepted half-open ranges cover every source sample once.
+
+The point bank tries interior positions at 1/4, 1/2, and 3/4 of a support and
+aperture gains 0.5, 1, and 2. This varies both point spacing and angular phase.
+Local x is `(sample_position-start)*x_scale`, with
+`x_scale=2*gain*max(triplet_range,1e-12)/support_length` after frame peak
+normalization. Centers, radii, and x scales therefore belong to normalized,
+amplitude-scaled coordinates, not raw sample indices. Equal-angle interpolation
+uses time to advance the angle; its horizontal circle projection is generally
+nonuniform between the three fitting points.
+
+Each candidate tests **all covered samples and the terminal anchor** against an
+absolute amplitude-error budget. After parameter rounding, all three fitted
+horizontal coordinates are checked too, using the same tolerance in the scaled
+coordinate units. This makes the retained center, radius, x scale, and angles
+consistent to a declared numerical tolerance. A fitted circle before quantization
+passes through the three source points within finite fitting roundoff.
+
+Dynamic precision chooses one significand width per circle across its seven
+fields: cx, cy, radius, x scale, and three angles. Line endpoints have their own
+width. The bank tries the requested minimum and 12, 16, 20, 24, 32, 40, 53 bits
+as applicable; each field keeps its own binary exponent. Signed normalized fields
+cost `11+significand_bits` in the hypothetical model. Subnormal rounding and the
+53-bit escape are explicit. Precision is validated after rounding, never inferred
+from radius alone. Thus two circles can use different amplitude ranges and
+parameter widths. This is distinct from encoded audio bitrate.
+
+Dynamic programming minimizes `(circle + line count, hypothetical model bits)`
+within this bank. This is a shortest coverage path over candidate supports,
+not the earlier FFT best-basis search. A circle counts once even though its two
+angular halves can have different angular rates. A line is its explicit
+zero-curvature limit; no infinite radius is stored. Fits with normalized radius
+above 1e6 are rejected as ill-conditioned and shorter/line candidates remain
+available. The coordinate floor and determinant epsilon 1e-18 are stated research
+choices, not a scale-independent geometric theorem.
+
+The default **prevalidated** search rejects nominal geometry that already fails
+the waveform checks before trying its quantizations. An exhaustive precision
+control also tries quantizations of those failures; rounding can occasionally
+move them inside tolerance. Both are benchmarked. Prevalidation is faster but
+can select slightly more descriptors. Minimum counts apply only to the candidates
+the selected policy actually admits; arbitrary circles, off-grid fitting points,
+residual additions, and global parameter optimization remain outside the search.
+
+The final decode is checked in original amplitude units. Accepted frames satisfy
+**maximum source-sample error ≤ `max_error`**, including quantization. RMS is also
+reported. Normalization cannot hide a tiny sample beside a huge one: an unresolved
+rescaled error returns an error. No original PCM or FFT coefficients are retained.
+There is no intersample, derivative, continuity, perceptual, or original-sound
+spectrum error guarantee. Adjacent rounded descriptors may differ at their join
+by up to the accepted anchor discrepancies.
+
+### Retrieving a spectrum from the circle parameters
+
+For one angular half with m samples, compile its radius/phase once into
+
+```text
+y[j] = cy + r*sin(theta + beta*j),  j=0..m-1
+G_m(delta) = sum_j exp(i*delta*j)
+           = (1-exp(i*m*delta)) / (1-exp(i*delta))
+           = exp(i*delta*(m-1)/2) * sin(m*delta/2)/sin(delta/2)
+H(omega) = cy*G_m(-omega)
+         + r/(2i) * (exp(i*theta)*G_m(beta-omega)
+                    - exp(-i*theta)*G_m(-beta-omega))
+```
+
+Multiply by the negative-exponential phase for its support start and sum the
+pieces. A line uses `first*G_m(-omega) + slope*sum_j j*exp(-i*omega*j)`; the latter
+is obtained from a rational first moment, with stable limiting series near DC.
+These are **finite sampled sums**, with no numerical integration and no expansion
+of every original sample during a query. The general finite-series identity is
+explained in [Julius O. Smith's DFT derivation](https://dsprelated.com/freebooks/mdft/DFT_Derived.html).
+This application to fitted piecewise waveform circles is the present experiment.
+
+The implementation uses an anchored sine difference to reduce cancellation for
+flat arcs, sinc/Dirichlet limits near resonance, and compensated accumulation.
+`closed` computes the stable expression per piece/frequency; `rotations` advances
+the numerator, denominator, and support phase along a frequency grid by complex
+multiplication. Roots are reanchored every 64 bins, with direct stable fallback
+near small denominators. A one-sample piece needs only its value and support
+phase. The second attempt also reuses candidate half-angle preparation and
+computes line moments rationally away from small denominators.
+
+For P prepared pieces and K requested frequencies, query work is **O(PK)**.
+A full native spectrum has K=floor(N/2)+1. If P grows proportionally to N, this
+remains quadratic; it has no general FFT complexity advantage. The benefit here
+is querying fewer frequencies from fewer retained geometric pieces, reusing the
+fit for many windows/queries, and avoiding integration and per-sample trigonometry.
+Fitting tests source samples and is separate work, bounded by the explicit
+maximum span, point/phase bank, and precision bank.
+
+A spectrum “at a point” is defined over a finite window around that time.
+`dtft(omega, start..end)` crops the retained pieces and gives phase origin at
+`start`. `hann_dtft` applies a periodic Hann to the **already fitted predictor**
+using three shifted finite sums:
+`0.5*H(omega)-0.25*H(omega-shift)-0.25*H(omega+shift)`, with
+`shift=2*pi/window_length`. Neither query refits the waveform. Pass raw samples
+when this continuous sequence of window queries is desired. The benchmark below
+instead applies Hann before fitting to match the earlier reference comparison.
+
+### Repeated Beethoven trials
+
+The supplied track is decoded read-only to 44.1 kHz mono PCM16. Two-second
+excerpts at 60, 180, and 300 seconds provide 171 possible N=1,024, hop=512 windows
+per excerpt. This experiment selects **21 evenly spaced windows per excerpt**:
+63 windows, including each midpoint. Nine fitting policies give **567 checked
+reconstructions**. This selection is narrower than the older 513-window survey.
+Independent Python predicts from exported centers/radii/angles and verifies both
+spectral methods against NumPy FFTs of the **same predicted samples**. Source-FFT
+differences are reported separately from retrieval arithmetic discrepancies.
+
+At maximum source-sample error 16 PCM16, repeated geometry definitions give:
+
+| Candidate bank | Mean descriptors, 60 s | 180 s | 300 s |
+|---|---:|---:|---:|
+| Span ≤8, midpoint, f64 fields | 140.05 | 128.29 | 248.95 |
+| Span ≤32, midpoint, f64 fields | 102.62 | 64.62 | 234.57 |
+| Span ≤128, midpoint, f64 fields | 100.95 | 60.05 | 233.86 |
+| Span ≤128, phase/aperture search, f64 | 87.48 | 52.10 | 199.95 |
+| Same, adaptive precision, exhaustive control | 86.00 | 51.43 | 196.86 |
+| Same, adaptive precision, prevalidated | 87.48 | 52.10 | 199.90 |
+
+The prevalidated result uses 64.14, 35.00, and 152.33 circles per frame, with
+23.33, 17.10, and 47.57 lines. Sample RMS errors are **6.79, 6.94, 6.80 PCM16**;
+maximum errors are **15.982, 15.981, 15.982**. Parameter widths of **8, 12, 16,
+and 20 bits** occur in this policy. Relative complex discrepancies from source
+FFT are **1.90%, 2.70%, 0.399%**. The same-predictor spectral discrepancies are
+**1.18e-13, 6.99e-14, 7.98e-14** for batched rotations and about 2e-14 for closed
+sums. Thus the largest error is the chosen waveform approximation, not retrieval.
+
+The first excerpt's strong-bin median magnitude difference is **1.10 dB** and
+median phase difference **7.43°** at this budget (bins above source peak−60 dB,
+both spectra above the threshold, DC/Nyquist excluded). Dominant bins agree in
+20/21 windows. Within 8–22.05 kHz the complex difference is about **202%**, where
+source energy is weak: the circle approximation can generate high-frequency
+content. A small full-spectrum relative error does not protect quiet spectral
+bins or phase. Tighter error policies are recorded in the snapshot and must be
+used when those differences matter.
+
+![Geometry definition search and direct-spectrum timings](figures/geometric-faft-20260930/geometric-search.png)
+
+[Vector figure](figures/geometric-faft-20260930/geometric-search.svg).
+
+The size sweep uses the first excerpt's central location, prevalidation,
+max error 16, span ≤128, phase search, and adaptive precision. Medians use five
+warmed Rust calls and 101 NumPy calls, timed inside their processes. Allocation
+is included; decoding audio, windowing, process startup, JSON transfer, and plots
+are excluded. Integral AFT geometry preparation is excluded from its query column.
+macOS arm64, Rust 1.98.1 release, Python 3.12.14, NumPy 2.3.5.
+
+| N | Fit, ms | Closed sums, µs | Batched rotations, µs | Nine frequency queries, µs | Integral reference, µs | Source rFFT, µs |
+|---|---:|---:|---:|---:|---:|---:|
+| 256 | 1.974 | 318.88 | 49.54 | 21.75 | 2,035.62 | 6.96 |
+| 512 | 5.264 | 1,499.75 | 236.04 | 51.38 | 3,283.12 | 4.46 |
+| 1,024 | 9.878 | 4,715.92 | 728.88 | 75.25 | 13,161.54 | 5.88 |
+| 2,048 | 19.894 | 20,484.25 | 3,096.00 | 156.17 | 52,290.08 | 9.38 |
+| 4,096 | 39.667 | 83,649.04 | 12,679.29 | 306.62 | 207,656.25 | 16.12 |
+
+The first 1,024-sample attempt took **40.314 ms fitting, 4.820 ms closed sums,
+1.053 ms batched rotations**. The retry took **9.878 ms, 4.716 ms, 0.729 ms**,
+respectively. Prevalidation also changes the admissible candidate set slightly:
+47 circles +22 lines became 45 circles +25 lines at that size/location.
+This is a measured algorithm/policy tradeoff, not an identical-model speed test.
+The full operation still needs fitting plus querying for new geometry; standard
+FFT is substantially faster for a complete source spectrum. Fitting reuse and
+selected-frequency queries are the relevant next performance targets.
+
+![Waveform circle predictions, spectrum and precision](figures/geometric-faft-20260930/geometric-model.png)
+
+[Vector figure](figures/geometric-faft-20260930/geometric-model.svg).
+
+![A fitted waveform circle advancing through its angular endpoints](figures/geometric-faft-20260930/geometric-circle.gif)
+
+This silent, slowed GIF shows an actual retained circumcircle through its three
+fitting points. Its left axis is local scaled geometric x; its right axis is time.
+Two angular rates carry it through the middle point. It is not an FFT epicycle.
+The frame uses the tested predictor, including its other circles and finite lines.
+
+### Point density, zoom, phase, and encoded bitrate
+
+These experiments distinguish three controls:
+
+- **Measured point density:** retain every second/fourth source sample and fit
+  circles to that data, then test the omitted values independently.
+- **Parameter precision:** vary geometry significand widths, with errors checked
+  after rounding. These widths are per-circle parameters, not audio bits/second.
+- **Model zoom:** evaluate a fixed circle function at 2, 4, 8, or 16 samples per
+  original interval, and retrieve its corresponding spectrum directly. The
+  transform is divided by zoom to retain amplitude×source-sample units; only the
+  original frequency range is reported. This does not measure additional data.
+
+All six sparse-point trials satisfy the 16-unit limit on retained points. For
+stride 4, omitted-point RMS errors are **12.47, 7.42, 75.22**, and maximum errors
+are **91.71, 25.45, 587.65 PCM16**, at 60/180/300 s. In particular, a good sparse
+fit cannot inherit its source-point bound at unknown positions. There is no
+anti-alias filter in this diagnostic: it intentionally measures point omission,
+not a valid lower-sample-rate audio conversion.
+
+For the selected first-excerpt frame, zoom 1..16 leaves relative source-FFT
+differences near **4.65%**. Same-curve verification remains around 1e-13. Zoom
+changes how the predicted curve is sampled but gives no clear source-prediction
+improvement in this test. Curve-generated spectral detail is not restored audio.
+
+![Omitted-point errors and zoom comparisons](figures/geometric-faft-20260930/geometric-prediction.png)
+
+[Vector figure](figures/geometric-faft-20260930/geometric-prediction.svg).
+
+Actual encoded-bitrate controls also re-encode the first two-second **mono decoded
+excerpt** at 80 and 160 kbps MP3, preserving 44.1 kHz and decoding gapless metadata
+before selecting the same 21 windows. These are additional lossy encodes of an
+already MP3-decoded source, not the same as a 320/160/80 kbps stereo encoder trial.
+Their decoded spectra differ from the original mono reference by **5.13% and
+5.02%**. Geometry uses about **84.90 and 85.57 descriptors/frame**, with its own
+source-sample errors below 16. The circle model's spectral differences from each
+re-encoded input are **2.03% and 1.99%**. Encoding changes the canonical input;
+these controls do not establish that circle prediction restores codec losses.
+Real private file sizes are recorded; no circle compression ratio is claimed.
+
+The hypothetical geometry cost includes a 96-bit length/scale header, support
+span-minus-one, type, precision, middle-position and aperture-gain tags, and all
+geometry fields with exponents/significands. It is only a search cost; Rust model
+objects and cached angular pieces occupy more memory. A wire format and measured
+bytes per circle remain separate work.
+
+### Reproduce and next experiments
+
+```sh
+cargo test --offline --test geometric_faft
+cargo build --offline --release --example geometric_bench --example aft_bench
+python3 -m unittest discover -s tests -p test_geometric_compare.py -v
+python3 tools/geometric_compare.py /path/to/music.mp3 /tmp/geometric-trial \
+  --ffmpeg /path/to/ffmpeg
+```
+
+NumPy, Matplotlib, Pillow, FFmpeg/libmp3lame, and Cargo are optional research-tool
+requirements. Output must be new and outside the repository. Exported model JSON,
+dense sample predictions, and re-encoded audio are invertible audio data and
+remain private. An optional `--previous-report` retains first-attempt aggregate
+measurements for retry comparisons. Published results are the
+[aggregate snapshot](experiments/geometric-faft-beethoven-20260930.json) and the
+rendered figures above. The existing resampler and its triplet contracts remain
+unchanged; this experiment fits separate geometry rather than modifying Analysis.
+
+Validation passed **32 Rust tests including the doctest**, all **17 optional
+Python tests**, formatting, Clippy and rustdoc with warnings denied, release
+examples, the release CLI build, and the existing codec example. Frozen reference
+vectors passed. Live ancestor cross-validation was not rerun; its resampler
+geometry and synthesis are unchanged. Local links and rendered figures/GIF were
+checked. The extreme-range/subnormal repairs are covered by synthetic tests and
+do not change the PCM16 experiment's geometry or spectral operations.
+
+Next: prune the point/phase bank with measured error bounds, reuse geometry across
+neighboring time windows, try parent/child parameter deltas and residual circles,
+make spectral phase/error part of a stated objective, and compare selected-bin
+queries with matched source FFT/Goertzel queries. Current operation counts and
+error budgets are explicit; there is no universal fastest-transform claim.
+
+## FAFT: fast rotating circles with model optimization
+
+This earlier **FFT-based control** was the first FAFT prototype (Fast Angular Fourier Transform with circle
+optimization). The earlier integral AFT is retained unchanged as a **reference
+preset** for its continuous angular interpolant. FAFT uses rotating vectors and
+real projections; it does not integrate the old fitted arcs faster or reproduce
+their continuous spectrum. It is an experimental representation and search built
+on a conventional FFT, not a newly discovered faster-than-FFT algorithm.
+
+### Circles, child blocks, and the line limit
+
+A circle fitted through three points in the time/amplitude plane and a rotating
+phasor circle are different objects. A retained phasor contributes
+
+```text
+c = a + i*b = radius * exp(i*phase)
+y_k(t) = Re(c * exp(i*2*pi*k*t/L))
+       = a*cos(2*pi*k*t/L) - b*sin(2*pi*k*t/L)
+y(t) = baseline(t) + sum_k y_k(t)
+```
+
+Time is the angle driver; summing circle projections builds the waveform.
+The local period is L samples. Interior positive bins use `c=2*DFT[k]/L`;
+DC and Nyquist use `c=DFT[k]/L`, with zero imaginary component. A single projected
+circle describes one real sinusoid; the corresponding complex DFT has two
+conjugate bins. The continuous fractional-time extension is specified by these
+projections, not by the original triplet interpolation.
+
+[src/faft.rs](../src/faft.rs) implements safe f64 radix-2 butterflies with angle
+rotations, inverse reconstruction, and `FaftFrame` model selection. The exact
+kernel is O(N log N) and agrees with the sampled DFT. This is the established
+[FFT factorization](https://www.fftw.org/~fftw/fftw-paper-ieee.pdf); the experimental
+part here is the choice of support, baseline, circles, and precision. Power-of-two
+frames of at least two samples are currently required for model optimization.
+The standalone `transform` also supports a singleton. No integral, quadrature,
+external FFT library, or resampler refit is used in FAFT.
+
+For each dyadic support, the search tries a constant mean and an endpoint line,
+then transforms the residual. It retains the largest-energy circles sufficient
+for the tightened RMS budget and assigns precision. A parent competes with its
+two child supports, recursively down to `min_block`. Children **replace** their
+parent and partition its sample range; they are not additive residual circles
+or predictions inferred from the parent alone. Their parameters come from the
+source samples. No gaps or overlap are allowed.
+
+The search minimizes `(baseline + circle descriptor count, estimated model bits)`
+lexicographically. Counting the baseline prevents a misleading zero-circle
+solution made of many short lines. Dynamic programming finds the best partition
+among the generated candidates using the same per-leaf RMS limit. It does **not**
+find a globally minimal set of arbitrary-frequency circles, fit optimal trends,
+optimize a shared tree-wide distortion budget, or find the globally cheapest
+precision allocation. The full dyadic search is O(N log² N), with at most two
+inverse checks per candidate. Setting `min_block=N` keeps only the root search.
+
+Three distinct collinear points have no finite circumcircle. They can be viewed
+as a zero-curvature limit, so `LineLimit` explicitly stores finite endpoints and
+evaluates their affine interpolation. No infinity is stored and no subtraction
+of huge centers/radii is needed. For a tangent circle,
+`r-sqrt(r²-t²) = t²/(r+sqrt(r²-t²))` tends to zero as r grows; tests check this
+stable limit, including a sloped line. This geometric limit is **not** the same
+as setting a phasor's frequency to zero, which gives a constant. Existing
+`Circle::through` degeneracy behavior and resampler contracts are unchanged.
+
+### Dynamic precision and the error contract
+
+Each frame is internally normalized by its peak amplitude. Every retained circle
+chooses its own signed Cartesian mantissas and binary exponent: 2–30 bits per
+component, or unquantized f64 when needed. Radius and phase are derived from those
+components. DC/Nyquist require only one component. This supports different
+amplitude ranges and precisions per circle, without making polar phase unstable
+near zero radius.
+
+For this orthogonal local grid, squared RMS error is the sum of discarded
+coefficient energies plus quantization energies. An interior circle has weight
+1/2; DC/Nyquist have weight 1. The current allocator reserves a 2% RMS margin,
+selects the shortest energy-ranked prefix meeting that budget, and distributes
+the remaining squared-error allowance equally across retained circles. It tries
+increasing precision, then verifies actual inverse reconstruction. An f64 retry
+handles a failed quantized candidate; unresolvable tolerances are rejected.
+The whole decoded frame is checked again after rescaling.
+
+The guarantee on accepted frames is **sample-domain RMS ≤ `max_rmse`**, in input
+amplitude units. This is not a peak-error, intersample, continuity, or perceptual
+guarantee. Independent Python synthesis also verifies every benchmark model by
+directly summing the retained projected circles. Decode needs no source PCM.
+`evaluate(t)` defines the piecewise function on `[0,N)`; child joins may jump and
+are not overlap-added. A streaming codec would need a separate boundary policy.
+
+`estimated_model_bits` is a transparent search cost, not a bitstream: 32 bits for
+length, 64 for frame scale; one flag per tree node; one baseline-kind flag, 64/128
+baseline bits and a 32-bit circle count per leaf; then `log2(L)` frequency bits,
+a 7-bit precision tag, and either a 16-bit exponent plus one/two mantissas or
+one/two f64 values per circle. There is no serializer, entropy coding, rate in
+bits/second, or measured compression ratio. Descriptor minimization can choose a
+model with slightly more estimated bits than the root-only control.
+
+### Beethoven measurements, 2026-09-30
+
+The supplied track was decoded read-only to mono PCM16 at 44.1 kHz. As in the
+reference experiment, two-second excerpts at 60, 180, and 300 seconds supply
+171 windows each: **513 frames**, N=1,024, hop=512, with a periodic Hann applied
+before all methods. Three RMS budgets (1, 16, 128 PCM16 units), root-only and
+dyadic searches produced **3,078 independently checked reconstructions**.
+These are windowed-frame experiments, not reconstruction of an overlap-added
+full track. No audio, decoded arrays, or invertible model parameters enter Git.
+
+The unoptimized rotation kernel's relative complex L2 discrepancies from NumPy
+rFFT are **3.36e-16, 3.37e-16, and 3.70e-16** for the three excerpts. This checks
+the same discrete transform target. The integral reference computes a different
+continuous target; its earlier spectral differences remain relevant only to that
+model. All requested reconstruction RMS limits were met after quantization.
+
+At a requested RMS limit of **16 PCM16 units**:
+
+| Excerpt | Root circles/frame | Tree circles/frame | Tree blocks/frame | Tree measured RMS | Largest sample error | Root search, µs | Tree search, µs |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 60 s | 43.49 | 43.09 | 1.24 | 15.45 | 90.58 | 151.29 | 794.58 |
+| 180 s | 24.47 | 24.47 | 1.00 | 15.45 | 78.30 | 151.12 | 771.46 |
+| 300 s | 122.23 | 120.77 | 1.78 | 15.49 | 90.20 | 171.46 | 960.79 |
+
+The tighter RMS=1 tree uses 145.41, 106.57, and 263.39 circles/frame; RMS=128
+uses 6.19, 2.95, and 45.87. These tradeoffs discard real signal content. The
+child search makes only small descriptor improvements on these windows and
+costs substantially more than root-only selection. A synthetic signal changing
+from bin 5 to bin 17 halfway through a frame does select two one-circle children.
+That demonstrates time-local adaptation, not a general advantage on music.
+
+Precision varies across circles: **2–16 component bits** occurred for the
+RMS=16 trials; across all trials it ranged from 2 to 21. The f64 escape was not
+needed in this recording. These are mantissa widths, not total bits per circle.
+
+The size sweep uses the same central position in the first excerpt, RMS=16,
+minimum child length 32. Times are medians of 11 warmed Rust calls and 101 NumPy
+calls; timings run inside their processes. Result allocations are included.
+The rotation kernel uses pre-created complex inputs; NumPy uses real inputs.
+Model search includes normalization, both baseline candidates, tree search,
+precision selection, decoding, and error checks. Audio decoding, windowing,
+process startup, text/JSON transfer, and graphics are excluded. The integral
+reference's geometry preparation is separately recorded in the JSON, not added
+to its transform column below. macOS arm64, Rust 1.98.1 release, Python 3.12.14,
+NumPy 2.3.5, FFmpeg 7.1.1; timing noise is visible at small N.
+
+| N | NumPy rFFT, µs | Rust rotation kernel, µs | FAFT tree search + checks, µs | FAFT decode, µs | Integral AFT reference, µs |
+|---|---:|---:|---:|---:|---:|
+| 256 | 4.79 | 3.88 | 126.00 | 4.38 | 1,326.79 |
+| 512 | 4.29 | 10.25 | 411.58 | 11.33 | 3,417.79 |
+| 1,024 | 5.83 | 16.04 | 706.04 | 17.54 | 13,058.46 |
+| 2,048 | 9.29 | 33.25 | 1,688.79 | 36.04 | 52,134.25 |
+| 4,096 | 16.12 | 68.88 | 3,848.88 | 76.71 | 207,846.62 |
+
+FAFT removes the quadratic integral path for its discrete target. The Rust kernel
+is still slower than optimized NumPy rFFT at N≥512, and optimization is extra
+work beyond either FFT. No faster-than-FFT claim follows from comparison with
+the integral reference.
+
+![FAFT timings and circle-count tradeoffs](figures/faft-20260930/faft-benchmark.png)
+
+[Vector figure](figures/faft-20260930/faft-benchmark.svg).
+
+![FAFT reconstruction, sample errors, spectra and per-circle precision](figures/faft-20260930/faft-model.png)
+
+The selected root frame has 44 circles, measured RMS 15.601 and peak error 67.592
+PCM16 units. Missing weak spectral bins show the deliberate approximation.
+[Vector figure](figures/faft-20260930/faft-model.svg).
+
+![Rotating circles projecting the Beethoven waveform](figures/faft-20260930/faft-rotating-circles.gif)
+
+The silent, slowed GIF uses measured coefficients. Its chain shows only the
+largest **8 of 44 circles** for legibility; the right panel explicitly compares
+that partial projection plus baseline with the full FAFT reconstruction and
+source. 48 frames at 10 fps traverse one 1,024-sample window, not 4.8 seconds of
+audio. Child support is temporal subdivision, not a constraint that a child
+circle's center physically lies on its parent's circumference.
+
+### Reproduce FAFT
+
+```sh
+cargo test --offline --test faft
+cargo build --offline --release --example faft_bench --example aft_bench
+python3 -m unittest discover -s tests -p test_faft_compare.py -v
+python3 tools/faft_compare.py /path/to/music.mp3 /tmp/faft-trial \
+  --ffmpeg /path/to/ffmpeg
+```
+
+The optional tool needs NumPy, Matplotlib, Pillow, FFmpeg, and Cargo. Output must
+be a new directory outside this repository. Its `private-selected-model.json`
+can reconstruct the audio frame and must remain private. The published
+[aggregate snapshot](experiments/faft-beethoven-20260930.json) includes all repeat
+timings, measured errors, circle counts, precision histograms, and support sizes.
+
+Validation passed **27 Rust tests including the doctest**, all **15 optional
+Python tests**, formatting, Clippy and rustdoc with warnings denied, release
+examples, and the existing codec example. Frozen compatibility vectors passed;
+the optional live ancestor cross-validation was not rerun because the resampler
+and its geometry are unchanged. Local links and generated plots/GIF were checked.
+
+Next experiments: off-grid frequency refinement to reduce leakage, shared
+parent/child residual circles, adaptive distortion allocation, a maximum-error
+option, overlap/continuity constraints, and an actual bounded wire format only
+after the model cost justifies it. Keeping those as separate steps makes it
+possible to identify which changes reduce work, circle count, or measured bits.
+
+## Angular Fourier Transform (AFT): reference preset benchmark
+
+This retained **reference preset** computes a complete frame spectrum from angular
 circle functions. **AFT** is the project name for this continuous angular model
 plus its analytic Fourier integral; it is not a new Fourier kernel or another
 algorithm for the sampled DFT. Compression is outside this experiment.

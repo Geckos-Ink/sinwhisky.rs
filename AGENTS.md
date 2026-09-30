@@ -192,10 +192,67 @@ source-pair line. Circle endpoint acceptance is 1e-8 times max(1, endpoint scale
 rejections and line/circle halves are counted. The prepared geometry is immutable.
 `evaluate` extends periodically; `fourier` analytically integrates on `[0,N]`;
 `spectrum` covers the standard nonnegative bins. Full cost is O(N²), not an FFT.
+Retained as the integral reference preset; FAFT is a separate discrete target.
 The AFT interpolation policy is separate from finite-zoom angular resampling.
 The continuous Nyquist coefficient need not be real. `tests/aft.rs` checks
 coverage, original geometry reuse, quadrature, sinc² linear control, phase shifts,
 conjugacy, constants/short inputs, and validation.
+
+### [src/geometric_faft.rs](src/geometric_faft.rs)
+
+Owns the geometry-first FAFT experiment: `GeometryFrame` fits source-point
+circumcircles and finite lines BEFORE spectrum retrieval, with no FFT or integral.
+Searches dyadic support lengths, interior points, aperture gains, and independent
+per-circle significand widths. Normalized coordinates, periodic terminal anchor,
+full coverage, sample/anchor checks and final rescaled maximum error are explicit.
+Rounded circle fields also check horizontal fitting anchors. Default prevalidation
+rejects failed nominal models before precision search; the exhaustive control
+can admit their quantized variants. DP minimizes descriptors then hypothetical
+bits within the admitted bank, not arbitrary geometry. `dtft`/`hann_dtft` crop and
+weight the prepared predictor without refitting; whole-grid queries use closed
+finite sums or batched rotations, O(pieces*bins). Stable resonance limits,
+reanchoring, and explicit line first moments replace integration. Zoom samples
+that same function, not more source data. Tests: `tests/geometric_faft.rs`.
+
+### [examples/geometric_bench.rs](examples/geometric_bench.rs) and [tools/geometric_compare.py](tools/geometric_compare.py)
+
+Rust benchmark records geometry/spectrum timings and exports private models.
+Python independently predicts from centers/radii/angles and checks source bounds
+and spectra against the SAME predictor's FFT. Compares point/phase/precision
+banks, exhaustive/prevalidated policies, first/retry timings, held-out source
+points, zoom density, and actual 80/160 kbps mono MP3 controls. Requires NumPy,
+Matplotlib/Pillow, FFmpeg/libmp3lame and Cargo. Output must be new/outside repo;
+model JSON, dense predictions and encoded audio stay private. Only aggregate
+JSON and rendered PNG/SVG/GIF enter docs. Synthetic bridge tests are
+`tests/test_geometric_compare.py`. Report: `docs/experiments/geometric-faft-beethoven-20260930.json`;
+figures: `docs/figures/geometric-faft-20260930/`.
+
+### [src/faft.rs](src/faft.rs)
+
+Owns the earlier FFT-based FAFT control kernel and model optimizer. `transform` is a
+standard radix-2 forward/inverse DFT, O(N log N). `FaftFrame` searches dyadic
+constant/endpoint-line plus rotating-circle candidates with per-circle Cartesian
+precision. Children replace parents on disjoint supports; they are not residual
+predictions. `LineLimit` is an explicit finite zero-curvature representation.
+The O(N log² N) search minimizes baseline+circle count, then estimated bits, within
+the generated candidates and equal per-leaf RMS budgets. `decode` needs no source
+PCM; both leaves and final rescaled output are checked. `evaluate` has no join
+continuity or intersample error guarantee. Model fields are private; descriptor
+views are immutable. Bits are hypothetical costs, not a serialized format or rate.
+`tests/faft.rs` checks direct DFT/inverse agreement, phase/Nyquist, sparse tones,
+precision, child selection, line limits, coverage, numerical range, and errors.
+
+### [examples/faft_bench.rs](examples/faft_bench.rs) and [tools/faft_compare.py](tools/faft_compare.py)
+
+Rust JSON Lines records warmed kernel/search/decode timings and private models.
+Python compares NumPy rFFT, root/tree optimization, and integral AFT; independently
+checks direct projected-circle reconstruction and RMS for every trial. Generates
+aggregate JSON, PNG/SVG plots, and a measured epicycle GIF. Requires NumPy,
+Matplotlib, Pillow, FFmpeg, and Cargo; none are core dependencies. Output must be
+new and outside the repository. `private-selected-model.json` is invertible audio
+information and must never enter version control. Tests: `tests/test_faft_compare.py`.
+Published results: `docs/experiments/faft-beethoven-20260930.json`, figures under
+`docs/figures/faft-20260930/`. Treat the unchanged integral AFT as a reference preset.
 
 ### [examples/aft_bench.rs](examples/aft_bench.rs)
 
@@ -240,7 +297,9 @@ partial blocks, circles, Fourier phase/quantization, and malformed streams.
 
 ### [docs/COMPRESSION.md](docs/COMPRESSION.md)
 
-Owns Fourier conventions/derivation, subarc limits, candidate search, SWR1 format,
+Owns geometry-first FAFT fitting, finite sums, point/phase/precision/zoom/bitrate
+comparisons and retry measurements; earlier FAFT phasor/line limits, dyadic search, dynamic precision, RMS contracts,
+and benchmarks; also Fourier conventions/derivation, subarc limits, candidate search, SWR1 format,
 reproduction, and measured Beethoven compression results. The current AFT section
 also owns the comparison definition, timing limits, and embedded graphs/GIF.
 Its snapshot is [aft-beethoven-20260930.json](docs/experiments/aft-beethoven-20260930.json),
@@ -425,6 +484,8 @@ extent, and frame-coverage tests detect these errors.
 | `sinwhisky` crate | [src/lib.rs](src/lib.rs), [Cargo.toml](Cargo.toml) | Public f64 analysis/synthesis and Error |
 | Geometry/models | [geometry](src/geometry.rs), [analysis](src/analysis.rs) | Local coordinates and immutable analysis views |
 | `resample`, `Analysis::resample` | [src/resample.rs](src/resample.rs) | Named interpolation contracts |
+| `GeometryFrame`, geometric queries | [direct geometry](src/geometric_faft.rs) | Source-point circles, peak-error bound, O(pieces*bins) finite sums |
+| `FaftFrame`, `transform` | [FAFT](src/faft.rs) | Rotating-circle optimization and sampled FFT; RMS bound, no wire format |
 | `ResearchFrame`, `SegmentModel` | [src/codec.rs](src/codec.rs) | Experimental in-memory prediction only |
 | Periodic angular AFT | [src/aft.rs](src/aft.rs) | Continuous angular interpolant, explicit joins and closing interval |
 | Arc transforms and frame DFT | [src/spectral.rs](src/spectral.rs) | Continuous vs. sampled transforms; no FFT speed claim |
@@ -446,6 +507,8 @@ cargo test --offline
 cargo test --offline --test contracts
 cargo test --offline --test reference_vectors
 cargo test --offline --test cli
+cargo test --offline --test faft
+cargo test --offline --test geometric_faft
 cargo test --offline --test spectral
 cargo test --offline --test aft
 cargo fmt --check
@@ -484,6 +547,15 @@ python3 tools/aft_compare.py /path/to/music.mp3 /tmp/aft-trial \
   --starts 60 180 300 --seconds 2 --frame 1024 --hop 512 --ffmpeg /path/to/ffmpeg
 ```
 
+Direct geometry trials and their synthetic bridge checks:
+
+```sh
+cargo build --offline --release --example geometric_bench --example aft_bench
+python3 -m unittest discover -s tests -p test_geometric_compare.py -v
+python3 tools/geometric_compare.py /path/to/music.mp3 /tmp/geometric-trial \
+  --ffmpeg /path/to/ffmpeg
+```
+
 Cross-validation needs NumPy/C compiler; `audio_compare.py` needs NumPy/FFmpeg.
 The compression lab needs NumPy/FFmpeg and the Rust exporter; its synthetic
 tests need NumPy (bridge test additionally needs the built exporter).
@@ -496,7 +568,7 @@ cross tool mutates test source. Publication is disabled by `publish=false`; ther
 is no release/deployment workflow. `cargo package --offline --allow-dirty` builds
 and verifies a local archive without publishing (missing remote metadata is expected).
 `RUST_BACKTRACE=1 cargo test --offline` helps
-inspect failures. No benchmark/security/fuzz automation is configured yet.
+inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz automation is configured.
 
 ## Test ownership map
 
@@ -510,6 +582,8 @@ inspect failures. No benchmark/security/fuzz automation is configured yet.
 | Parameter/size safety | `validation_and_overflow`, `neighbors_and_extreme_finite_inputs` |
 | Frame coverage/error/circle reuse | `segments_cover_every_sample_with_bounded_error`, `codec_reuses_circles_and_lines_and_validates_metadata` |
 | C/Python compatibility | Frozen vectors; optional live cross-validation tool |
+| Geometry-first circles / spectral sums / cropped windows / zoom | `tests/geometric_faft.rs`; optional `tests/test_geometric_compare.py` |
+| FAFT kernel/circles/precision/tree/line limits | `tests/faft.rs`; optional `tests/test_faft_compare.py` |
 | CLI boundary | `command_line_modes_and_failures` |
 | Music wrapper/blocks/bitrate/fractional upscale | Optional `tests/test_music.py` integration suite |
 | Periodic AFT / benchmark conventions | `tests/aft.rs`, optional `tests/test_aft_compare.py` |
@@ -539,12 +613,16 @@ This initial unpublished API may evolve; document every behavior change.
 - **Implemented:** reusable analysis, uniform/angular resampling, numeric CLI,
   standalone Cargo tests, optional live comparison and listening scripts, and
   `test_music.sh` with encoded-bitrate reduction and block-based sample-rate upscaling.
-- **Experimental:** mono `ResearchFrame`, circle transforms/predictor DFT, and an
+- **Experimental:** geometry-first FAFT coverage and spectrum queries with
+  peak-error limits; FFT-based FAFT rotating-circle selection with per-circle precision and
+  verified RMS limits; retained integral AFT reference; mono `ResearchFrame`,
+  circle transforms/predictor DFT, and an
   optional NumPy circle/subarc/Fourier lab with full byte/error measurements.
   Three short Beethoven excerpts show no material circle-specific coding gain.
 - **Known gaps:** uniform branch mismatch; no stable compression format, native
   audio I/O, streaming, stereo coupling, perceptual validation, or cross-platform CI.
-- **Planned:** see [ROADMAP.md](ROADMAP.md), especially geometry quantization, better residual
+- **Planned:** see [ROADMAP.md](ROADMAP.md), especially off-grid/residual circle
+  search, continuity, shared distortion allocation, geometry quantization, better residual
   coding, broader byte/error measurements and a separately validated FLT implementation.
 
 ## Task start and handoff checklist
