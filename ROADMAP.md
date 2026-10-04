@@ -3,6 +3,9 @@
 ## Implemented foundation
 
 - Standalone Rust library and numeric CLI; standard library only.
+- Reference ports (outside the crate): WebAssembly with SIMD and WebGPU for the
+  original-angular resampler, the AFT, and FAFT on its curve, checked against
+  Rust vectors (`ports/`).
 - Reusable triplet analysis with circle/line models, local coordinates, aperture,
   branches, and unwrapped angles.
 - Separate uniform-x compatibility and repaired original angular interpolation.

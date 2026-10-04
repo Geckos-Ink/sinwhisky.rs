@@ -1,0 +1,15 @@
+{
+  "targets": {
+    "release": {
+      "outFile": "build/sinwhisky.wasm",
+      "optimizeLevel": 3,
+      "shrinkLevel": 0,
+      "noAssert": true
+    }
+  },
+  "options": {
+    "runtime": "stub",
+    "bindings": false,
+    "enable": ["simd"]
+  }
+}

@@ -258,6 +258,16 @@ python3 tools/compression_lab.py /path/to/music.mp3 /tmp/compression-trial \
 See the [experiment and format](docs/COMPRESSION.md) for reproduction, results,
 and limitations, and [the roadmap](ROADMAP.md) for further work.
 
+## Ports: WebAssembly SIMD and WebGPU
+
+[ports/](ports/README.md) holds reference ports of the original-angular resampler, the
+AFT, and FAFT on the AFT's curve (values, scans, derivatives, Newton-refined peaks):
+AssemblyScript compiled to WebAssembly with scalar and SIMD (`f64x2`) paths, and WGSL
+kernels for WebGPU (f32, geometry from the WebAssembly port). They are checked against
+vectors from `cargo run --offline --example port_vectors`; the WebAssembly port agrees
+with the crate to about 4e-14 of each output's peak, the WebGPU kernels to about 1e-6.
+They are not Cargo dependencies and do not change the library.
+
 ## Verification and listening experiments
 
 For a single output music file, use [test_music.sh](test_music.sh). It requires

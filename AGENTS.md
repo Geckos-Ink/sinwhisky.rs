@@ -114,6 +114,10 @@ FAFT consumer: source samples → circle determination (`GeometryFrame` or
 at arbitrary frequencies, analytic derivatives, and relevant peaks. Zoom only
 samples the same curve for synthesis and comparison.
 
+Ports consumer (outside the crate): `examples/port_vectors` → `ports/fixtures/vectors.json`
+→ `ports/wasm-simd` (f64 resampler, AFT, FAFT; scalar and SIMD) → `ports/webgpu` (f32
+kernels fed by the WebAssembly port's models and atoms), each checked against the vectors.
+
 The library is synchronous, mono, and fully buffered. There are no threads,
 services, persistence adapters, callbacks, or networking. The optional Python
 listening tools invoke FFmpeg and the release CLI locally, per channel.
@@ -498,6 +502,30 @@ whole-signal Rust run; the other tests protect fractional duration/rate, encoded
 bitrate reduction, factor validation, and existing output preservation. It requires
 FFmpeg and a release binary; missing prerequisites skip the suite explicitly.
 It writes only temporary audio and does not depend on the user's recordings.
+
+### [examples/port_vectors.rs](examples/port_vectors.rs) and [ports/fixtures/vectors.json](ports/fixtures/vectors.json)
+
+Deterministic reference vectors for the ports (no clock, a fixed LCG): six cases (tones,
+a Hann pilot, flat/ramp/step lines, PCM16-scale noise, short, the paper's) with the
+original-angular resampler at zooms 1/3/7, `AngularFrame` stats, `evaluate`, `fourier`,
+FAFT rectangular and Hann values, and default Hann peaks. Regenerate with
+`cargo run --offline --quiet --example port_vectors > ports/fixtures/vectors.json`; it must
+reproduce byte for byte, and a change is a reviewed change of the crate's behaviour.
+
+### [ports/](ports/README.md)
+
+Reference ports outside the crate (no Cargo dependency, no effect on the library):
+`ports/wasm-simd` (AssemblyScript to WebAssembly, f64: the original-angular resampler,
+the AFT, and FAFT values/scan/derivatives/peaks on its curve, scalar paths following the
+crate's arithmetic and `v128` SIMD paths) and `ports/webgpu` (WGSL kernels in f32 for
+the resampler and the rectangular FAFT, geometry from the WebAssembly port, no GPU
+trigonometry). `wasm-simd/build/sinwhisky.wasm` is a checked-in build so the ports run
+without a toolchain; rebuild it (`npm run build`, AssemblyScript is the only, development,
+dependency) after editing `assembly/index.ts`. Tests: `ports/wasm-simd/test.mjs` (Node,
+against the vectors) and `ports/webgpu/test.html` (a browser with WebGPU, served by
+`ports/serve.mjs` on loopback). Not ported: uniform-x resampling, `GeometryFrame`,
+circle-rate seeds, codec frames. Measured agreement and timings live in `ports/README.md`;
+update them with any port or crate change that moves them. `node_modules/` stays ignored.
 
 ### [README.md](README.md)
 

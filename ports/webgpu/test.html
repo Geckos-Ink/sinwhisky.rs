@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SinWhisky WebGPU parity</title>
+  <style>
+    body { font: 14px/1.4 ui-monospace, Menlo, monospace; margin: 16px; background: #fff; color: #111; }
+    @media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } }
+    .pass { color: #2a7; } .fail { color: #d33; }
+  </style>
+</head>
+<body>
+  <h1 id="status">Running…</h1>
+  <pre id="result"></pre>
+  <script type="module" src="./test.mjs"></script>
+</body>
+</html>
