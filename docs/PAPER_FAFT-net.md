@@ -430,7 +430,7 @@ $$
 
 This step evaluates the sum $\sum_k\Phi_k(\omega)q^{s_k-t_0}$, a generalized polynomial in $q$ whose exponents are the support starts, by accumulating powers of $q$. It is the same kind of single-frequency recurrence as Goertzel's algorithm for one DFT bin [4], applied to closed-form coefficients of a continuous curve instead of to samples. The Cooley–Tukey FFT [2] also multiplies by phases and adds, but its speed comes from a factorization of the $N\times N$ DFT matrix that shares partial sums among all $N$ bins of a fixed grid. FAFT has no such factorization and shares no work between frequencies. There is also no route through the DFT of the samples, because the AFT is not a linear function of the samples (Remark 1). The speed of FAFT comes from three properties of each rotation: its transform is a closed form (no quadrature), it needs no dense samples (no zoom), and, as shown next, it needs no transcendental function call.
 
-### 5.2 Prepared turns and chained phases
+### 5.2 Prepared turns, chained phases and the endpoint kernel
 
 The exponentials in (22) factor as
 
@@ -438,25 +438,43 @@ $$
 e^{i(\beta-\omega)L}=e^{i\beta L}q^L,\qquad e^{i(-\beta-\omega)L}=\overline{e^{i\beta L}}q^L,\qquad e^{-i\omega L}=q^L. \tag{36}
 $$
 
-The *turn* $e^{i\beta L}$ is the rotation of the radius vector over the support, $\zeta_L=\zeta_0e^{i\beta L}$. It belongs to the circle, does not depend on $\omega$, and is prepared once. For a query, one $\sin/\cos$ pair gives $q$, one power $q^L$ is formed per distinct support length (by repeated squaring, chained over the sorted lengths), and the support phases follow from (29) with one multiplication per support. Each rotation then costs a few complex products and two real divisions, $1/(\beta-\omega)$ and $1/(-\beta-\omega)$; the division $1/\omega$ is shared by all rotations. No transcendental function is called per rotation. The Hann weight (31) costs three such sums.
+The *turn* $e^{i\beta L}$ is the rotation of the radius vector over the support, $\zeta_L=\zeta_0e^{i\beta L}$. It belongs to the circle, does not depend on $\omega$, and is prepared once. For a query, one $\sin/\cos$ pair gives $q$, one power $q^L$ is formed per distinct support length (by repeated squaring, chained over the sorted lengths), and the support phases follow from (29) with one multiplication per support. The division $1/\omega$ is shared by all rotations, no transcendental function is called per rotation, and the Hann weight (31) costs three such sums. In the moment form (22), each arc costs two complex products with the turn and two real divisions, $1/(\beta-\omega)$ and $1/(-\beta-\omega)$.
+
+*Endpoint kernel.* FAFT evaluates arcs with Proposition 2 instead. Write (14) for an arc as $y(s+u)=y_0+f(u)$, with the deviation $f(u)=a(\cos\beta u-1)+b\sin\beta u$. The deviation satisfies $f''=-\beta^2(f+a)$, so (24) with centre height $-a$, $f(0)=0$ and $q^L=e^{-i\omega L}$ gives
+
+$$
+F(\omega)=\frac{f'_Lq^L-f'_0+i\omega f_Lq^L+\beta^2aE_0(-\omega)}{(\omega-\beta)(\omega+\beta)},\qquad \Phi(\omega)=y_0E_0(-\omega)+F(\omega). \tag{37}
+$$
+
+The endpoint data $f'_0=\beta b$, $f_L=a(\cos\beta L-1)+b\sin\beta L$, $f'_L=\beta(b\cos\beta L-a\sin\beta L)$ and $\beta^2a$ do not depend on $\omega$ and are prepared once, with $\cos\beta L-1=-2\sin^2(\beta L/2)$. An arc then costs a few real products and one real division. Where (37) is a removable $0/0$, within the resonance guard $\lvert(\omega\mp\beta)L\rvert < 1/2$, FAFT evaluates the moment form (22) with the prepared turn and the series of Section 5.3. Writing $N$ and $D$ for the numerator and denominator of (37), the frequency derivatives of $F$ follow from $N=DF$:
+
+$$
+F'=\frac{N'-2\omega F}{D},\qquad F''=\frac{N''-4\omega F'-2F}{D}, \tag{38a}
+$$
+
+$$
+N'=-iLq^Lf'_L+iq^Lf_L+\omega Lq^Lf_L-i\beta^2aE_1(-\omega),\qquad N''=-L^2q^Lf'_L+2Lq^Lf_L-i\omega L^2q^Lf_L-\beta^2aE_2(-\omega). \tag{38b}
+$$
+
+Since $\Psi_\ell$ is the transform of $u^\ell y$, the arc's deviation contributes $iF'$ to $\Psi_{k,1}$ and $-F''$ to $\Psi_{k,2}$ in (34), so the derivatives use the same kernel and the same guard.
 
 ### 5.3 Numerical stability
 
 *Near DC and resonance.* When $\omega\approx0$ or $\omega\approx\pm\beta$, the ratio (19) divides two small numbers. Let $\chi=\delta L$ be the accumulated phase offset over the support and $\varepsilon=2^{-52}$ the machine epsilon of double precision. For $\lvert\chi\rvert$ below a threshold, $0.05$ for values and $0.5$ for derivatives, the moments are evaluated from their power series
 
 $$
-E_\ell(\delta,L)=L^{\ell+1}\sum_{\nu\ge0}\frac{(i\chi)^\nu}{\nu!(\nu+\ell+1)}, \tag{37}
+E_\ell(\delta,L)=L^{\ell+1}\sum_{\nu\ge0}\frac{(i\chi)^\nu}{\nu!(\nu+\ell+1)}, \tag{39}
 $$
 
 with $\nu$ a nonnegative integer term index. The even and odd powers of $i\chi$ give the real and imaginary parts, each evaluated by Horner's rule in $\chi^2$ with precomputed coefficients; 8 to 18 terms keep the truncation error at the level of the rounding error. Above the threshold, cancellation gives the ratio (19) and its recurrence a relative error of at most about $\varepsilon/\lvert\chi\rvert^{\ell+1}$ [10]: below $10^{-13}$ for values and $10^{-11}$ for derivatives.
 
 *Chained phases.* Each multiplication in (29) adds a relative rounding error of order $\varepsilon$, so the error of the running phase grows with the number of supports chained [10]. The chain is re-anchored with an exact $\sin/\cos$ every 64 supports.
 
-*Flat arcs.* An arc with a large radius has a centre far away: its centre height $c$ is a large number of sign opposite to $r\sin\varphi$, and the two nearly cancel in $y_0=c+a$. The anchored forms (14) and (22) start from the evaluated start value $y_0$ and never form $c$ again. The $a$ and $b$ terms of (22) still carry the radius, however, and the bracketed differences of moments are computed with an absolute error of order $\varepsilon L$. The rounding error of one rotation's contribution is therefore of order $\varepsilon rL$, the same order as the representation error of the stored centre and radius themselves. The fitter of Section 7 does not accept circles whose radius exceeds $10^6$ times the peak amplitude of the frame; such supports use a line or are split. The endpoint form (24), applied to the deviation $y-y_0$ with the $\omega$-independent quantities $\sin\beta L$ and $\cos\beta L-1=-2\sin^2(\beta L/2)$ prepared once, would compute the deviation of a flat arc with relative accuracy away from resonance and with one real division per rotation. It is a candidate kernel (Section 8), not the one measured in Section 7.
+*Flat arcs.* An arc with a large radius has a centre far away: its centre height $c$ is a large number of sign opposite to $r\sin\varphi$, and the two nearly cancel in $y_0=c+a$. The anchored forms (14) and (22) start from the evaluated start value $y_0$ and never form $c$ again. In the moment form (22), however, the $a$ and $b$ terms still carry the radius, and the bracketed differences of moments are computed with an absolute error of order $\varepsilon L$, so one rotation's rounding error is of order $\varepsilon rL$. The endpoint kernel (37) combines only quantities of the size of the deviation itself: its end change, its slopes and its curvature $\beta^2a$, all prepared with relative accuracy. Away from resonance it therefore computes the deviation of a flat arc with relative accuracy. For an arc with $r=10^8$ and a height near 50, the implementation's tests require agreement with quadrature of the evaluated curve to $10^{-12}$ relative; the moment form misses this by two orders of magnitude. Near $\omega=\pm\beta$, numerator and denominator of (37) vanish together. The relative error then grows like $\varepsilon/\lvert\chi\rvert$, and like $6\varepsilon/\chi^2$ for its curvature term, with $\chi=(\omega\mp\beta)L$; this is why the guard of Section 5.2 hands those arcs to the moment form. The fitter of Section 7 also does not accept circles whose radius exceeds $10^6$ times the peak amplitude of the frame; such supports use a line or are split.
 
 ### 5.4 Algorithms
 
-In the pseudocode, $o$ is the crop offset from the original rotation start, $s'$ and $L'$ are the cropped start and duration, and `turn` is the prepared rotation $e^{i\beta L'}$ of the radius vector over the cropped support. In Algorithm 2, $Q[L]$ stores $q^L$, $S$ accumulates the transform, `phase` is the chained support phase of (29), and $e_{\mathrm{dc}}$, $e_+$, $e_-$ are the moments $E_0$ at $-\omega$, $\beta-\omega$ and $-\beta-\omega$. `conj` denotes complex conjugation, $R$ the number of rotations in the prepared window and $K$ the number of queried frequencies.
+In the pseudocode, $o$ is the crop offset from the original rotation start, $s'$ and $L'$ are the cropped start and duration, `turn` is the prepared rotation $e^{i\beta L'}$ of the radius vector over the cropped support, and $f'_0$, $f_L$, $f'_L$, $\kappa=\beta^2a$ are the endpoint data of (37). In Algorithm 2, $Q[L]$ stores $q^L$, $S$ accumulates the transform, `phase` is the chained support phase of (29), and $e_{\mathrm{dc}}$, $e_+$, $e_-$ are the moments $E_0$ at $-\omega$, $\beta-\omega$ and $-\beta-\omega$. `conj` denotes complex conjugation, $R$ the number of rotations in the prepared window and $K$ the number of queried frequencies.
 
 ```text
 Algorithm 1  PREPARE(curve, window [t0, t0+T), weighting)
@@ -464,7 +482,9 @@ Algorithm 1  PREPARE(curve, window [t0, t0+T), weighting)
       crop to [max(s,t0), min(s+L,t0+T));   o ← max(s,t0) − s
       y0 ← y(s+o);  a ← r·sin(φ+βo);  b ← r·cos(φ+βo)    ▷ anchored form (14)
       turn ← e^{iβL'}                                      ▷ independent of ω
-      store (s'−t0, L', y0, a, b, β, d, turn)
+      f'0 ← βb;  f_L ← a(cos βL' − 1) + b·sin βL'          ▷ endpoint data (37),
+      f'_L ← β(b·cos βL' − a·sin βL');  κ ← β²a            ▷ cos−1 = −2sin²(βL'/2)
+      store (s'−t0, L', y0, a, b, β, d, turn, f'0, f_L, f'_L, κ)
   mark each rotation whose successor is stacked on the same support
   lengths ← sorted distinct L'
   return prepared window
@@ -477,7 +497,10 @@ Algorithm 2  RECT(prepared, ω)                       ▷ Proposition 3, O(R)
   for each rotation k in time order:
       e_dc ← E0(−ω, L_k; Q[L_k])
       Φ ← y0·e_dc                                    ▷ Corollary 1
-      if arc:  e₊ ← E0(β−ω; turn·Q[L_k]);   e₋ ← E0(−β−ω; conj(turn)·Q[L_k])
+      if arc and |(ω−β)L_k| ≥ ½ and |(ω+β)L_k| ≥ ½:     ▷ endpoint kernel (37)
+               Φ ← Φ + (f'_L·Q[L_k] − f'0 + iω·f_L·Q[L_k] + κ·e_dc) / ((ω−β)(ω+β))
+      else if arc:                                   ▷ moment form (22)
+               e₊ ← E0(β−ω; turn·Q[L_k]);   e₋ ← E0(−β−ω; conj(turn)·Q[L_k])
                Φ ← Φ + a·((e₊+e₋)/2 − e_dc) + b·(e₊−e₋)/(2i)
       if d≠0:  Φ ← Φ + d·E1(−ω; Q[L_k], e_dc)
       S ← S + phase·Φ                                ▷ rotate and add
@@ -502,7 +525,7 @@ The AFT is a smooth function of $\omega$. Its relevant frequencies are the local
 The resolution of the transform is set by the window *duration*, through $2\pi/T$, not by the number of samples. A zoomed curve has the same $T$ and therefore the same resolution. Seeds are taken on a grid of spacing $2\pi/(T\rho)$, where the density $\rho$, a positive integer with default 2, is the number of seed spacings per interval of width $2\pi/T$. Each seed is refined by Newton's method on the spectral power $G(\omega)=\lvert\mathcal A(\omega)\rvert^2$, using Proposition 5. With $\mathrm{Re}$ the real part,
 
 $$
-G'=2\mathrm{Re}\bigl(\overline{\mathcal A}\mathcal A'\bigr),\qquad G''=2\bigl(\lvert\mathcal A'\rvert^2+\mathrm{Re}\bigl(\overline{\mathcal A}\mathcal A''\bigr)\bigr),\qquad \omega\leftarrow\omega-\frac{G'}{G''}\quad\bigl(G'' < 0\bigr). \tag{38}
+G'=2\mathrm{Re}\bigl(\overline{\mathcal A}\mathcal A'\bigr),\qquad G''=2\bigl(\lvert\mathcal A'\rvert^2+\mathrm{Re}\bigl(\overline{\mathcal A}\mathcal A''\bigr)\bigr),\qquad \omega\leftarrow\omega-\frac{G'}{G''}\quad\bigl(G'' < 0\bigr). \tag{40}
 $$
 
 The Newton step is safeguarded by a bracket that shrinks with the sign of $G'$ and falls back to bisection, as in standard safeguarded root finding [11]. In Algorithm 4, $\omega_{\mathrm{lo}}$ and $\omega_{\mathrm{hi}}$ bound the search band, $j$ indexes scan frequencies, `floor` is the minimum accepted magnitude, and `lo` and `hi` bracket a candidate peak. $A$, $A'$, $A''$ are the transform and its frequency derivatives, $G_1$, $G_2$ the first and second derivatives of the power, and $\omega_{\mathrm{new}}$ the proposed next query frequency.
@@ -513,7 +536,7 @@ Algorithm 4  PEAKS(prepared, [ω_lo, ω_hi], ρ, floor)
   for each local maximum j above floor:
       ω ← parabolic vertex of log|AFT| at j−1, j, j+1
       [lo, hi] ← [ω_{j−1}, ω_{j+1}]
-      repeat                                     ▷ safeguarded Newton, (38)
+      repeat                                     ▷ safeguarded Newton, (40)
           (A, A', A'') ← DERIVATIVES(ω)          ▷ Proposition 5
           G1 ← 2Re(conj(A)A');  G2 ← 2(|A'|² + Re(conj(A)A''))
           if G1 > 0: lo ← ω;  if G1 < 0: hi ← ω
@@ -560,6 +583,8 @@ The decay is close to $z^{-2}$ at low zoom (images) and approaches $z^{-1}$ at h
 
 Query cost grows linearly with the number of rotations; the sizes 256…4096 gave 0.97, 1.69, 3.51, 7.09 and 15.47 µs per frequency (Figure 3).
 
+**Kernel.** The Beethoven measurements in this section used the moment form (22) for every arc and were not repeated. The endpoint kernel (37) was compared with it afterwards on three synthetic 1,024-sample frames (three tones plus noise, hierarchical fits with source tolerances 4, 16 and 64, 644–962 rotations per window), by building both versions of the implementation and alternating them over 256 frequencies. One query became 1.11–1.12× faster with the rectangular weight and 1.18–1.20× faster with Hann, a Hann peak list 1.15× faster, and a query on the triplet curve 1.07× faster; with unit-length arcs, the resonance guard covers a wider band of frequencies. Values changed by at most $5\cdot10^{-15}$ relative to the largest value, and the peak lists were identical.
+
 ![Figure 3](https://geckos.ink/stuff/sinwhisky/figures/faft-circle-arcs-20260930/faft-convergence-cost.svg)
 
 *Figure 3. Left: difference between zoom-sampled transforms and the AFT. Middle: cost of one arbitrary frequency against window size. Right: cost of a list of relevant peaks, with the FFT of the samples as a reference for a different target.*
@@ -584,7 +609,6 @@ Query cost grows linearly with the number of rotations; the sizes 256…4096 gav
 
 - Rotate and add in time: sliding windows that update only the rotations entering and leaving.
 - Circle fits with continuous joins, which remove the $\omega^{-1}$ tails of Corollary 3.
-- An endpoint-form kernel (Section 5.3), with separate handling of the removable singularities at $\omega=\pm\beta$, and new measurements of its cost and accuracy.
 - Certified bounds for peak completeness.
 - Circle determinations whose angular rates carry physical frequency. By (16), an aperture equal to the largest magnitude of the central difference makes the rate exact at a symmetric crest of a pure tone; whether any aperture rule achieves this away from crests is open.
 - Many frequencies at once: by (25), the AFT is a sum of simple poles at $\pm\beta_k$ with exponential numerators. Whether this structure admits a fast multi-frequency evaluation with a stated error bound is open.
@@ -613,4 +637,4 @@ The geometric construction of Section 2 turns sampled data into a continuous pie
 
 ### Reproducibility notes
 
-The mathematical definition of the method is contained in Definitions 1–3, Propositions 1–6, Corollaries 1–3 and Algorithms 1–4. Section 5.3 states the numerical-stability thresholds used near DC and resonance, and Section 7 reports the fitting tolerance, support limit, sample format, window size, implementation language and version, and benchmark protocol. The reference implementation is `src/faft.rs` of the SinWhisky.rs crate. Its tests check the closed forms against independent Gauss–Legendre quadrature, the derivatives against finite differences, dense evaluation against Proposition 6 including images and join terms, and FAFT against the per-interval evaluation on the triplet curve. They also check the geometric statements of this paper: the rates as doubled inscribed angles and the crest relation (16), the endpoint form (24), the infinite-radius limit of Section 2.5, and the element and array factors of (30). Figure 1 is generated by `tools/faft_geometry_figure.py`, which asserts (8) for its example. The method can therefore be interpreted and implemented from the manuscript alone.
+The mathematical definition of the method is contained in Definitions 1–3, Propositions 1–6, Corollaries 1–3, the kernel (37)–(38) and Algorithms 1–4. Sections 5.2 and 5.3 state the resonance guard and the numerical-stability thresholds used near DC and resonance, and Section 7 reports the fitting tolerance, support limit, sample format, window size, implementation language and version, and benchmark protocol. The reference implementation is `src/faft.rs` of the SinWhisky.rs crate. Its tests check the closed forms against independent Gauss–Legendre quadrature, including a flat arc at $10^{-12}$ relative, the derivatives against quadrature of the moments of (33) and against finite differences, dense evaluation against Proposition 6 including images and join terms, and FAFT against the per-interval evaluation on the triplet curve. They also check the geometric statements of this paper: the rates as doubled inscribed angles and the crest relation (16), the endpoint form (24), the infinite-radius limit of Section 2.5, and the element and array factors of (30). Figure 1 is generated by `tools/faft_geometry_figure.py`, which asserts (8) for its example. The method can therefore be interpreted and implemented from the manuscript alone.

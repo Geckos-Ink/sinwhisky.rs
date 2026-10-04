@@ -12,11 +12,15 @@
 //!    grid tied to a sample count, no sampling, no FFT and no quadrature.
 //!
 //! The fast rule is "rotate and add": each rotation's transform is multiplied by
-//! its support phase and added to the previous result. Support phases are chained
-//! by complex multiplication, and each rotation's `exp(i*rate*length)` is prepared
-//! once, so a query needs one sin/cos pair plus a few products and divisions per
-//! rotation. A query costs O(rotations); a dense spectrum is not faster than an
-//! FFT of the source samples, which computes a different (sampled) target.
+//! its support phase and added to the previous result, as in a single-frequency
+//! (Goertzel-like) recurrence, not an FFT factorization. Support phases are chained
+//! by complex multiplication. Each arc is evaluated in endpoint form: its deviation
+//! from the start value obeys f'' = -rate^2*(f + a), so its transform needs only
+//! the end values, end slopes and rate^2*a, prepared once, and one real division per
+//! query. Near omega = ±rate, where that form is 0/0, the moment form with the
+//! prepared `exp(i*rate*length)` and series is used. A query needs one sin/cos pair
+//! and costs O(rotations); a dense spectrum is not faster than an FFT of the source
+//! samples, which computes a different (sampled) target.
 //!
 //! ```
 //! use sinwhisky::faft::{CircleCurve, PeakParams, Weighting};
@@ -283,19 +287,30 @@ impl CircleCurve {
             }
             let offset = (start - r.start) as f64;
             let length = end - start;
-            // Anchored form y = value + a*(cos(rate*u)-1) + b*sin(rate*u) + slope*u
-            // avoids the center/radius cancellation of flat arcs inside the sums.
+            // Anchored form y = value + a*(cos(rate*u)-1) + b*sin(rate*u) + slope*u,
+            // so the centre height of a flat arc is never formed again.
             let (s, cos) = (r.phase + r.rate * offset).sin_cos();
+            let (a, b) = (r.radius * s, r.radius * cos);
+            // Endpoint data of the arc deviation f = a*(cos-1) + b*sin, which obeys
+            // f'' = -rate^2*(f + a): f(0)=0, f'(0), f(L), f'(L) and rate^2*a.
+            // cos(turn)-1 = -2 sin^2(turn/2) keeps flat arcs relatively accurate.
+            let sweep = r.rate * length as f64;
+            let (sin_sweep, cos_sweep) = sweep.sin_cos();
+            let cos_minus_one = -2.0 * (0.5 * sweep).sin().powi(2);
             atoms.push(Atom {
                 start: start - window.start,
                 length,
                 length_index: 0,
                 value: r.value(offset),
-                a: r.radius * s,
-                b: r.radius * cos,
+                a,
+                b,
                 slope: r.slope,
                 rate: r.rate,
-                turn: phase(r.rate * length as f64),
+                turn: c(cos_sweep, sin_sweep),
+                start_slope: r.rate * b,
+                end_slope: r.rate * (b * (1.0 + cos_minus_one) - a * sin_sweep),
+                end_change: a * cos_minus_one + b * sin_sweep,
+                curvature: r.rate * r.rate * a,
                 arc: r.radius != 0.0 && r.rate != 0.0,
                 advances: true,
             });
@@ -310,9 +325,19 @@ impl CircleCurve {
         lengths.dedup();
         for atom in &mut atoms {
             atom.length_index = lengths.binary_search(&atom.length).unwrap_or(0);
-            if ![atom.value, atom.a, atom.b, atom.turn.re, atom.turn.im]
-                .iter()
-                .all(|v| v.is_finite())
+            if ![
+                atom.value,
+                atom.a,
+                atom.b,
+                atom.turn.re,
+                atom.turn.im,
+                atom.start_slope,
+                atom.end_slope,
+                atom.end_change,
+                atom.curvature,
+            ]
+            .iter()
+            .all(|v| v.is_finite())
             {
                 return Err(Error::InvalidParameter("FAFT prepared overflow"));
             }
@@ -352,6 +377,12 @@ struct Atom {
     rate: f64,
     /// exp(i*rate*length): frequency independent, prepared once.
     turn: Complex,
+    /// Endpoint data of the arc's deviation from `value`, prepared once:
+    /// slopes at both ends, change over the support, and rate^2*a.
+    start_slope: f64,
+    end_slope: f64,
+    end_change: f64,
+    curvature: f64,
     arc: bool,
     /// False while the next rotation is stacked on the same support.
     advances: bool,
@@ -362,6 +393,11 @@ struct Atom {
 /// ~eps/|x|^(k+1) to cancellation: <1e-13 for values, <1e-11 for derivatives.
 const VALUE_SERIES: f64 = 0.05;
 const DERIVATIVE_SERIES: f64 = 0.5;
+/// Arcs use the endpoint form unless |(omega -+ rate)*length| is below this guard.
+/// Near the removable singularity at omega = ±rate the endpoint numerator cancels
+/// (relative error ~eps/|x|, and ~6*eps/x^2 for its curvature term as x -> 0), so the
+/// moment form with its series takes over there.
+const ENDPOINT_GUARD: f64 = 0.5;
 const TERMS: usize = 18;
 
 /// 1/(n! * (n+k+1)): coefficients of E_k(delta)/L^(k+1) in powers of i*x.
@@ -513,8 +549,20 @@ impl Faft {
             let length = atom.length as f64;
             let dc = e0(-omega, inverse, length, q_length);
             let mut phi = scale(dc, atom.value);
-            if atom.arc {
-                let (up, down) = (atom.rate - omega, -atom.rate - omega);
+            let (up, down) = (atom.rate - omega, -atom.rate - omega);
+            if atom.arc && (up * length).abs().min((down * length).abs()) >= ENDPOINT_GUARD {
+                // Endpoint form: the deviation f obeys f'' = -rate^2*(f + a), so
+                // F = [f'(L)q^L - f'(0) + i*omega*f(L)q^L + rate^2*a*E0(-omega)]
+                //     / ((omega - rate)(omega + rate)): one real division per arc.
+                let change = omega * atom.end_change;
+                let numerator = c(
+                    q_length.re * atom.end_slope - atom.start_slope - q_length.im * change
+                        + atom.curvature * dc.re,
+                    q_length.im * atom.end_slope + q_length.re * change + atom.curvature * dc.im,
+                );
+                phi = add(phi, scale(numerator, 1.0 / (up * down)));
+            } else if atom.arc {
+                // Moment form near omega = ±rate, where the endpoint form is 0/0.
                 let plus = e0(up, 1.0 / up, length, mul(atom.turn, q_length));
                 let minus = e0(down, 1.0 / down, length, mul(conj(atom.turn), q_length));
                 // cos(rate*u)-1 and sin(rate*u) transforms.
@@ -563,7 +611,46 @@ impl Faft {
                 let dc = moments::<3>(-omega, length, q_length);
                 (dc, dc.map(|m| scale(m, atom.value)))
             };
-            if atom.arc {
+            let (up, down) = (atom.rate - omega, -atom.rate - omega);
+            if atom.arc && (up * length).abs().min((down * length).abs()) >= ENDPOINT_GUARD {
+                // Endpoint form F = N/D with D = omega^2 - rate^2, differentiated in
+                // omega: F' = (N' - 2*omega*F)/D, F'' = (N'' - 4*omega*F' - 2F)/D, and
+                // psi1 = i*F', psi2 = -F''. dE0(-omega)/domega = -i*E1(-omega), etc.
+                let inverse = 1.0 / (up * down);
+                let end = scale(q_length, atom.end_slope);
+                let change = scale(q_length, atom.end_change);
+                let n0 = c(
+                    end.re - atom.start_slope - omega * change.im + atom.curvature * dc[0].re,
+                    end.im + omega * change.re + atom.curvature * dc[0].im,
+                );
+                let n1 = add(
+                    add(minus_i(scale(end, length)), c(-change.im, change.re)),
+                    add(
+                        scale(change, omega * length),
+                        minus_i(scale(dc[1], atom.curvature)),
+                    ),
+                );
+                let n2 = sub(
+                    add(
+                        scale(end, -length * length),
+                        add(
+                            scale(change, 2.0 * length),
+                            minus_i(scale(change, omega * length * length)),
+                        ),
+                    ),
+                    scale(dc[2], atom.curvature),
+                );
+                let f0 = scale(n0, inverse);
+                let f1 = scale(sub(n1, scale(f0, 2.0 * omega)), inverse);
+                let f2 = scale(
+                    sub(sub(n2, scale(f1, 4.0 * omega)), scale(f0, 2.0)),
+                    inverse,
+                );
+                psi[0] = add(psi[0], f0);
+                psi[1] = add(psi[1], c(-f1.im, f1.re));
+                psi[2] = sub(psi[2], f2);
+            } else if atom.arc {
+                // Moment form near omega = ±rate.
                 let plus = moments::<3>(atom.rate - omega, length, mul(atom.turn, q_length));
                 let minus =
                     moments::<3>(-atom.rate - omega, length, mul(conj(atom.turn), q_length));

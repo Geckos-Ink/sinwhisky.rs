@@ -10,7 +10,7 @@ The crate stays the authority. Every port is checked against vectors exported fr
 
 | Folder | What | Precision | Runs in |
 | --- | --- | --- | --- |
-| [`wasm-simd/`](wasm-simd) | AssemblyScript → WebAssembly. A scalar path that follows the crate's arithmetic, and a SIMD path (`v128`, `f64x2`). | f64 | Node (tested with 24), browsers, any WebAssembly host with SIMD |
+| [`wasm-simd/`](wasm-simd) | AssemblyScript → WebAssembly. A scalar path that follows the crate's arithmetic (FAFT in the earlier moment form), and a SIMD path (`v128`, `f64x2`). | f64 | Node (tested with 24), browsers, any WebAssembly host with SIMD |
 | [`webgpu/`](webgpu) | WGSL compute kernels with a JavaScript host. Geometry comes from the WebAssembly port. | f32 | Browsers and Electron with WebGPU, Deno |
 | [`fixtures/vectors.json`](fixtures/vectors.json) | Reference outputs from [`examples/port_vectors.rs`](../examples/port_vectors.rs). | f64 | — |
 
@@ -62,13 +62,15 @@ The rotate-and-add sums are closed forms, with series near resonance. Support ph
 
 These are the largest deviations from sinwhisky.rs over all six fixture cases. Each is relative to that output's peak; peak ω is in radians per sample.
 
+The crate now evaluates arcs away from resonance with the endpoint form (`src/faft.rs`), while both ports keep the moment form with its prepared turns. The two forms are equal in exact arithmetic. Regenerating the vectors moved FAFT values by at most 1.2e-15 relative and peak entries by 5.7e-14. The WebAssembly columns were re-measured against the new vectors; the WebGPU column dates from the earlier vectors, and f32 rounding is far larger than that change.
+
 | Output | WebAssembly scalar | WebAssembly SIMD | WebGPU (f32) |
 | --- | --- | --- | --- |
 | resample, zoom 1, 3, 7 | 3.8e-14 | 3.8e-14 | 2.4e-7 |
 | AFT curve (`evaluate`) | 2.6e-14 | — | — |
 | `AngularFrame::fourier` | 1.6e-14 | 1.6e-14 | 7.8e-7 (rect, normalized) |
-| FAFT Hann values | 1.9e-15 | 2.1e-15 | 1.1e-6 (Hann scan vs WebAssembly) |
-| peak frequencies | 8.9e-16 | — | — |
+| FAFT Hann values | 2.0e-15 | 2.1e-15 | 1.1e-6 (Hann scan vs WebAssembly) |
+| peak frequencies | 2.0e-15 | — | — |
 
 Timings are medians on a 4096-sample signal:
 

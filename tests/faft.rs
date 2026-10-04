@@ -91,6 +91,41 @@ fn quadrature(
     sum
 }
 
+/// Independent quadrature of (t-tc)^power * y(t)w(t)exp(-i*omega*(t-tc)), with tc
+/// the window centre: the integrals behind the centred value and its derivatives.
+fn centred_moment(
+    curve: &CircleCurve,
+    window: std::ops::Range<usize>,
+    hann: bool,
+    omega: f64,
+    power: i32,
+) -> Complex {
+    let nodes = legendre(24);
+    let panels = 8;
+    let duration = window.len() as f64;
+    let centre = window.start as f64 + 0.5 * duration;
+    let mut sum = Complex::default();
+    for unit in window.clone() {
+        for p in 0..panels {
+            let a = unit as f64 + p as f64 / panels as f64;
+            let h = 0.5 / panels as f64;
+            for &(x, w) in &nodes {
+                let t = a + h * (x + 1.0);
+                let weight = if hann {
+                    0.5 - 0.5 * (TAU * (t - window.start as f64) / duration).cos()
+                } else {
+                    1.0
+                };
+                let local = t - centre;
+                let y = curve.evaluate(t).unwrap() * weight * local.powi(power) * w * h;
+                sum.re += y * (omega * local).cos();
+                sum.im -= y * (omega * local).sin();
+            }
+        }
+    }
+    sum
+}
+
 fn mixed_curve() -> CircleCurve {
     let arc = |start, length, center, radius, phase, rate| Rotation {
         start,
@@ -341,6 +376,34 @@ fn arc_transform_is_fixed_by_its_endpoints() {
 }
 
 #[test]
+fn flat_arcs_keep_relative_accuracy_away_from_resonance() {
+    // A radius of 1e8 around a curve of height ~50: the moment form rounds at about
+    // eps*radius*length (~1e-8 here). The endpoint kernel works on the deviation
+    // from the start value with prepared sin/cos of the sweep, so it matches the
+    // quadrature of the evaluated curve to its own rounding level.
+    let curve = CircleCurve::new(vec![Rotation {
+        start: 0,
+        length: 16,
+        center: -1e8 + 50.0,
+        radius: 1e8,
+        phase: FRAC_PI_2 - 1e-6,
+        rate: 2e-7,
+        slope: 0.0,
+    }])
+    .unwrap();
+    let faft = curve.transform(0..16, Weighting::Rectangular).unwrap();
+    for omega in [0.7, 2.9, -1.3, 5.0] {
+        let expected = quadrature(&curve, 0..16, false, omega);
+        let actual = faft.integral(omega).unwrap();
+        assert!(
+            distance(actual, expected) < 1e-12 * (1.0 + magnitude(expected)),
+            "{omega}: {:e}",
+            distance(actual, expected)
+        );
+    }
+}
+
+#[test]
 fn line_is_the_infinite_radius_limit_of_an_arc() {
     // PAPER_FAFT.md section 2.5: fix the start value y0, start slope d and start angle;
     // as the radius grows the rate d/(r*cos(phase)) vanishes and the arc's transform
@@ -434,6 +497,46 @@ fn identical_rotations_factor_into_element_and_array_terms() {
             im: phi.im * count as f64,
         };
         assert!(distance(train.integral(omega).unwrap(), expected) < 1e-12 * magnitude(expected));
+    }
+}
+
+#[test]
+fn derivatives_match_quadrature_of_moments() {
+    // d/domega brings down -i*(t-tc): A' = -i*M1/W and A'' = -M2/W, with M_p the
+    // centred moments, at DC, near and far from resonance, and above pi.
+    let curve = mixed_curve();
+    for weighting in [Weighting::Rectangular, Weighting::Hann] {
+        let hann = weighting == Weighting::Hann;
+        for window in [0..21, 1..20, 5..9] {
+            let faft = curve.transform(window.clone(), weighting).unwrap();
+            let weight = window.len() as f64 * if hann { 0.5 } else { 1.0 };
+            for omega in [0.0, 0.2, 0.52, 0.9, 1.31, 2.9, 3.3, 7.7, -1.1] {
+                let d = faft.derivatives(omega).unwrap();
+                let m = [0, 1, 2].map(|p| centred_moment(&curve, window.clone(), hann, omega, p));
+                let expected = [
+                    m[0],
+                    Complex {
+                        re: m[1].im,
+                        im: -m[1].re,
+                    },
+                    Complex {
+                        re: -m[2].re,
+                        im: -m[2].im,
+                    },
+                ];
+                for k in 0..3 {
+                    let e = Complex {
+                        re: expected[k].re / weight,
+                        im: expected[k].im / weight,
+                    };
+                    assert!(
+                        distance(d[k], e) < 1e-10 * (1.0 + magnitude(e)),
+                        "{window:?} {weighting:?} omega={omega} k={k}: {:?} vs {e:?}",
+                        d[k]
+                    );
+                }
+            }
+        }
     }
 }
 

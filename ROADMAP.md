@@ -50,6 +50,12 @@
   AFT is ~1e-13; independent quadrature ~1e-14. Measured on 63 Beethoven windows
   against the earlier sampled kernels, adaptive search and FFT controls. Zoom
   convergence and the Poisson image identity are tested.
+- FAFT endpoint kernel: arcs away from `omega = ±rate` use the endpoint form of
+  their deviation (prepared end slopes, end change and `rate^2*a`; one real
+  division per arc), and the derivatives use its differentiated quotient. Flat
+  arcs keep relative accuracy (radius 1e8 within 1e-12 of quadrature). On
+  synthetic 1,024-sample frames, queries were 1.11–1.20× faster and peak lists
+  1.15× faster than the moment form, with values within 5e-15.
 
 ## Current focus: FAFT of determined circles
 
@@ -69,13 +75,10 @@
    angle of the fitting triangle over the side's duration. At a symmetric crest of
    a tone it matches the tone only when the aperture equals the tone's largest
    central difference (tested). Find out whether any aperture rule works away from crests.
-5. Endpoint-form kernel. On an arc, `y'' = -rate^2*(y - center)`, so its
-   transform depends only on its end values and slopes, centre height and rate.
-   With prepared `sin(rate*L)` and `cos(rate*L) - 1`, this needs one real division
-   per arc instead of two. It also keeps relative accuracy for flat arcs; the
-   current moment form's rounding grows like eps*radius*length. Resonances
-   `omega = ±rate` need the existing series. Measure cost and accuracy on the
-   Beethoven windows, then regenerate the port vectors before switching.
+5. Endpoint kernel follow-up. The crate now uses it (see Implemented). Port it
+   to `ports/wasm-simd` (scalar and SIMD) and `ports/webgpu`, which still use the
+   moment form, and re-measure the Beethoven windows, whose published timings
+   predate it.
 6. Dense spectra are O(rotations × frequencies). Only consider butterfly/NUFFT-style
    interpolation with a stated error bound and measured crossover size; no FFT
    speed claim exists today.

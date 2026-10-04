@@ -131,10 +131,28 @@ below (`arc_transform_is_fixed_by_its_endpoints`).
 
 The anchored form starts from the evaluated start value and never forms `center`
 again, which for flat arcs is a large number nearly cancelling `radius*sin(phase)`.
-Its `a` and `b` terms still carry the radius, so the rounding error of one
-rotation is about `eps*radius*length`, the same order as the representation
-error of the stored circle. `GeometryFrame` rejects circles whose radius exceeds
-1e6 times the frame's peak amplitude. The Hann weighting is exact:
+
+**Kernel.** `Faft` evaluates each arc with the endpoint form applied to its
+deviation `f = a*(cos(rate*u) - 1) + b*sin(rate*u)` from the start value, which
+obeys `f'' = -rate^2*(f + a)`:
+
+```text
+Phi(omega) = y0*E(-omega) + [ f'_L*q^L - f'_0 + i*omega*f_L*q^L + rate^2*a*E(-omega) ]
+                            / ((omega - rate)*(omega + rate))
+```
+
+The endpoint data `f'_0 = rate*b`, `f_L`, `f'_L` and `rate^2*a` are prepared once,
+with `cos(rate*L) - 1 = -2*sin^2(rate*L/2)`. A query then costs a few real
+products and one real division per arc. Every term has the size of the
+deviation, so flat arcs keep relative accuracy
+(`flat_arcs_keep_relative_accuracy_away_from_resonance`, radius 1e8, 1e-12
+against quadrature). The previous moment form rounds at about
+`eps*radius*length` there. Within the resonance guard `|(omega -+ rate)*L| < 0.5`
+the endpoint form is 0/0, so the moment form with prepared turns and series is
+used. The derivatives differentiate the same quotient: `F' = (N' - 2*omega*F)/D`
+and `F'' = (N'' - 4*omega*F' - 2F)/D` (`derivatives_match_quadrature_of_moments`).
+`GeometryFrame` also rejects circles whose radius exceeds 1e6 times the frame's
+peak amplitude. The Hann weighting is exact:
 `1/2*F(omega) - 1/4*F(omega - 2*pi/T) - 1/4*F(omega + 2*pi/T)` of the rectangular
 transform, with `+1/4` signs when the phase origin is the window centre (as in
 `derivatives`). There is no quadrature, sampling, FFT or refit.
@@ -155,8 +173,9 @@ samples. The speed comes from the following:
 - `exp(i*(rate-omega)*L)` is then the product of the prepared turn and `q^L`. The
   support phase of the next rotation is the current phase times `q^L`,
   re-anchored with sin/cos every 64 supports.
-- Each rotation then costs a few complex products and two real divisions. There is
-  no transcendental call per rotation.
+- Each arc then costs a few real products and one real division (endpoint
+  kernel), or near resonance two complex products and two divisions (moment
+  form). There is no transcendental call per rotation.
 
 Near DC or resonance, `|delta*L|` is small and the ratio forms cancel. Below 0.05
 (values) or 0.5 (derivatives), `E` and its moments use Horner series in `x^2`
@@ -283,6 +302,15 @@ of cost, not values.
 | FAFT peaks from circle references only | 7.38 ms | 3.15 ms | 33.82 ms |
 | NumPy rFFT of the source window / 64× zero-padded | 5.8 / 280 µs | 5.8 / 280 µs | 5.9 / 281 µs |
 
+These Beethoven timings used the moment form for every arc. The endpoint kernel
+was compared afterwards with that build (commit 6a594f8). Both builds alternated
+on three synthetic 1,024-sample frames: tones at 0.031, 0.173 and 0.61
+rad/sample plus noise, hierarchical tolerances 4, 16 and 64, 644–962 rotations,
+and 256 frequencies. One query was 1.11–1.12× faster rectangular and 1.18–1.20×
+faster Hann, a Hann peak list 1.15× faster, and the triplet curve 1.07× faster.
+Values moved by at most 5e-15 of the largest value, and the peaks were
+identical. The Beethoven windows were not re-measured.
+
 Summary: an exact continuous query costs 1.4–2.3× less than the earlier
 sampled rotation kernel and 9–14× less than its closed sums. It is 3.3–3.5×
 faster than integral AFT on the AFT's own curve, with identical values. A
@@ -393,8 +421,5 @@ and adaptive modules keep their names and behaviour as sampled-predictor control
   test bounds that certify no peak above the floor was missed.
 - Circle determination whose angular rates carry physical frequency, so that
   references could seed peaks. The current rates do not.
-- An endpoint-form kernel: evaluate each arc's deviation from its start value with
-  the endpoint form and prepared `sin(rate*L)` and `cos(rate*L) - 1`. It needs one
-  real division per arc instead of two, and keeps relative accuracy for flat
-  arcs away from `omega = ±rate`. Near resonance it must fall back to the moment
-  series. Adopting it requires new measurements and regenerated port vectors.
+- Port the endpoint kernel to `ports/wasm-simd` and `ports/webgpu`, which still
+  evaluate the moment form, and re-measure the Beethoven windows with it.

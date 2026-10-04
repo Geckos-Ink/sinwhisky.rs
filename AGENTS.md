@@ -93,8 +93,9 @@ code. Optional NumPy/FFmpeg research tools must not become library dependencies.
   omega; zoom is never a transform parameter. `CircleCurve` coverage is contiguous
   (stacks share a support), conversions copy geometry without refitting, and a
   zoom-z sampled transform equals FAFT plus images (tested). Peaks are exact
-  maxima of that function; the duration-spaced scan is a seed heuristic.
-  Protected by `tests/faft.rs`.
+  maxima of that function; the duration-spaced scan is a seed heuristic. Arcs use
+  the endpoint kernel outside the resonance guard and the moment form inside it;
+  values and derivatives share that split. Protected by `tests/faft.rs`.
 - **Frame coverage/error:** [ResearchFrame::from_analysis](src/codec.rs) partitions
   source samples into nonempty half-open ranges. Every predicted source sample
   is checked against tolerance. Decode has no dependency on original PCM.
@@ -294,10 +295,14 @@ circle rates (fixed width, no chains). `peaks` = duration-spaced scan (Hann shar
 an extended grid), parabolic start, bracketed Newton, flank/unconverged drops,
 merge width and floors, with `PeakStats`. O(rotations) per query. No FFT, sampling
 or quadrature; no dense-spectrum speed claim. Circle rates are geometric, not
-physical frequencies; scan completeness is measured, not guaranteed. The
-transform kernel evaluates the anchored moment form. The endpoint form is an
-identity under test, not the kernel, and its rounding grows like
-eps*radius*length on flat arcs. Tests: `tests/faft.rs`, which also pins the
+physical frequencies; scan completeness is measured, not guaranteed. Kernel:
+arcs use the endpoint form of their deviation from the start value (prepared
+`start_slope`/`end_slope`/`end_change`/`curvature`; one real division), values
+and derivatives alike. Within `ENDPOINT_GUARD` (`|(omega -+ rate)*L| < 0.5`)
+they fall back to the moment form with prepared turns and series. Keep the
+guard: the endpoint quotient is 0/0 at resonance. The moment form rounds flat
+arcs at eps*radius*length; the endpoint form keeps relative accuracy. The
+published Beethoven timings predate the endpoint kernel. Tests: `tests/faft.rs`, which also pins the
 paper's geometric identities (doubled inscribed angles and the crest rate,
 endpoint form, infinite-radius line limit, element × array factor); doctest in
 the module. Definition: [docs/FAFT.md](docs/FAFT.md).
@@ -542,7 +547,7 @@ reproduce byte for byte, and a change is a reviewed change of the crate's behavi
 Reference ports outside the crate (no Cargo dependency, no effect on the library):
 `ports/wasm-simd` (AssemblyScript to WebAssembly, f64: the original-angular resampler,
 the AFT, and FAFT values/scan/derivatives/peaks on its curve, scalar paths following the
-crate's arithmetic and `v128` SIMD paths) and `ports/webgpu` (WGSL kernels in f32 for
+crate's arithmetic except that FAFT keeps the moment form, and `v128` SIMD paths) and `ports/webgpu` (WGSL kernels in f32 for
 the resampler and the rectangular FAFT, geometry from the WebAssembly port, no GPU
 trigonometry). `wasm-simd/build/sinwhisky.wasm` is a checked-in build so the ports run
 without a toolchain; rebuild it (`npm run build`, AssemblyScript is the only, development,
@@ -764,6 +769,7 @@ inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz auto
 | Geometry-first circles / spectral sums / cropped windows / zoom | `tests/geometric_faft.rs`; optional `tests/test_geometric_compare.py` |
 | FAFT exactness/derivatives/AFT same curve/zoom images/peaks/validation | `tests/faft.rs`, doctest; optional `tests/test_faft_compare.py` |
 | Paper identities: inscribed-angle rates, crest rate, endpoint form, line limit, element × array factor | `tests/faft.rs` (`rotation_rates_are_twice_the_inscribed_angles_of_the_anchor_triangle`, `arc_transform_is_fixed_by_its_endpoints`, `line_is_the_infinite_radius_limit_of_an_arc`, `identical_rotations_factor_into_element_and_array_terms`) |
+| Endpoint kernel: flat-arc accuracy, derivatives as moment integrals | `flat_arcs_keep_relative_accuracy_away_from_resonance`, `derivatives_match_quadrature_of_moments` |
 | FFT phasor kernel/circles/precision/tree/line limits | `tests/phasor_fft.rs`; optional `tests/test_phasor_compare.py` |
 | CLI boundary | `command_line_modes_and_failures` |
 | Music wrapper/blocks/bitrate/fractional upscale | Optional `tests/test_music.py` integration suite |
