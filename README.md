@@ -30,29 +30,9 @@ geometry. It covers rates as inscribed angles, the line as the infinite-radius
 limit, the endpoint form, and time distance as phase. Its
 [web copy](docs/PAPER_FAFT-net.md) has the same text with absolute figure URLs.
 A draft [extension on equalization and compression](docs/PAPER_EQ_COMPRESSION.md)
-applies the transform to band division, exact filtering of circle curves and a
-proposed layered coding scheme. Its identities are checked by
-`python3 tools/eq_compression_checks.py`. A first implementation (experimental)
-divides a track into bands that add back exactly, equalizes, isolates a band, and
-codes audio in SWL2 streams ([byte layout](docs/SWL2.md)): LPC correction within
-an error tolerance (0 = lossless), optional frequency-gradient groups and
-SinWhisky anchors, every choice made automatically by coded size. Try it on a real
-file (FFmpeg and Cargo required; the output directory must be new and outside the
-repository):
-
-```sh
-./test_music.sh quick /path/to/music.mp3 /tmp/eq-quick
-./test_music.sh eq /path/to/music.mp3 /tmp/eq-bass --edges 250,2000 --gains-db 6,0,-12
-./test_music.sh extrude /path/to/music.mp3 /tmp/eq-bass-only --band 40,250
-./test_music.sh compress /path/to/music.mp3 /tmp/eq-full --search full --upper 6000 --tolerance 0,16,128
-```
-
-`quick` decodes 5 s from 60 s and writes the bands, tonal and residual tracks, an
-equalized mix, an isolated band and its remainder, SWL2 streams with their decoded
-audio, a parametric (gradients only) version, `source.wav`, a FLAC control and
-`report.json`. On three excerpts of one recording, lossless SWL2 is 7.7-11.0%
-smaller than FLAC (paper Section 6.2); the gradient layer paid only on a quiet
-passage with a tolerance.
+applies the transform to band division, exact filtering of circle curves and
+layered coding; see [Equalization, band isolation and compression](#equalization-band-isolation-and-compression-experimental)
+below.
 
 ## Build and try
 
@@ -295,6 +275,68 @@ python3 tools/compression_lab.py /path/to/music.mp3 /tmp/compression-trial \
 
 See the [experiment and format](docs/COMPRESSION.md) for reproduction, results,
 and limitations, and [the roadmap](ROADMAP.md) for further work.
+
+## Equalization, band isolation and compression (experimental)
+
+These modules implement the [equalization and compression paper](docs/PAPER_EQ_COMPRESSION.md);
+its numerical identities are checked by `python3 tools/eq_compression_checks.py`.
+
+- `faft::Faft::fit_banded` / `fit_refined`: the joint tone fit solved by one
+  ascending (low to high frequency) and one descending pass over a banded Gram
+  matrix, plus per-component Newton refinement of the frequencies.
+- `analog`: exact continuous-time filtering of circle curves. A rational filter's
+  state is carried from arc to arc in closed form; outputs are spiral pieces.
+  Butterworth low-passes and zero-phase (forward-backward) passes.
+- `bands`: `ToneAnalysis` fits tones per Hann window on the circle curve;
+  `divide` assigns each tone whole to a band and splits the residual with
+  complementary zero-phase filters, so the bands add back to the source exactly;
+  `equalize` applies band gains; `extrude` isolates one band and its remainder.
+- `layered` (SWL2, [byte layout](docs/SWL2.md)): a channel is a list of chunks.
+  *Frequency-gradient groups* describe partials as segments with a constant
+  frequency gradient, grouped by start and duration with a shared volume function,
+  in fields whose bit widths the chunk header declares. *SinWhisky anchors* describe
+  a band by samples at dynamic positions rebuilt by circles. The *correction* chunk
+  codes what remains with closed-loop LPC (order up to 32, integer arithmetic) and
+  the layers as per-block side information, within an error tolerance (0 =
+  lossless). `encode_auto` picks the stereo mode, layers, bands, precisions and
+  block size by exact coded size. A parametric mode keeps only the layers.
+
+Real-file runs (FFmpeg and Cargo required; the output directory must be new and
+outside the repository):
+
+```sh
+./test_music.sh quick /path/to/music.mp3 /tmp/eq-quick
+./test_music.sh eq /path/to/music.mp3 /tmp/eq-bass --edges 250,2000 --gains-db 6,0,-12
+./test_music.sh extrude /path/to/music.mp3 /tmp/eq-bass-only --band 40,250
+./test_music.sh compress /path/to/music.mp3 /tmp/eq-full --search full --upper 6000 --tolerance 0,16,128
+```
+
+`quick` (about 22 s) decodes 5 s from 60 s and writes the bands, tonal and
+residual tracks, an equalized mix, an isolated band and its remainder, SWL2
+streams with their decoded audio, a parametric (gradients only) version,
+`source.wav`, a FLAC control and `report.json`.
+
+**Benchmark.** Three 5 s stereo excerpts of one Beethoven recording (44.1 kHz,
+PCM16, 882,000 bytes each), full search with tones up to 6 kHz
+([snapshot](docs/experiments/swl2-beethoven-20261005.json), paper Section 6.2).
+Every stream was decoded and checked against its tolerance.
+
+| Excerpt | FLAC lossless | SWL2 lossless | SWL2, tolerance 16 | SWL2, tolerance 128 | Parametric (no correction) |
+|---|---:|---:|---:|---:|---:|
+| 60 s | 328,541 (37.25%) | 303,109 (34.37%) | 125,756, 48.5 dB | 62,856, 30.8 dB | 158,755, 29.0 dB |
+| 180 s | 230,035 (26.08%) | 204,765 (23.22%) | 62,305, 34.0 dB | 22,580, 16.8 dB | 27,168, 14.3 dB |
+| 300 s | 415,142 (47.07%) | 380,505 (43.14%) | 181,763, 51.4 dB | 94,016, 33.5 dB | 263,143, 32.3 dB |
+
+Bytes, with the share of PCM or the SNR. Losslessly SWL2 is 7.7–11.0% smaller
+than FLAC, and on the 60 s excerpt 19–25% smaller than the first coder (SWL1).
+The gain comes from the LPC correction layer. The automatic search kept no
+gradient or anchor layer on the loud excerpts, where linear prediction already
+removes the tonal energy; on the quiet 180 s excerpt gradients made the stream
+16.9% smaller at tolerance 128 and 1.8% at 16. Parametric streams need more bytes
+than the correction layer at comparable SNR. These are three excerpts of one
+recording, timings are about 50 s per stream with the full search on one laptop,
+and no listening result is claimed. Planned next: cascaded NLMS stages in the
+correction layer ([roadmap](ROADMAP.md)).
 
 ## Ports: WebAssembly SIMD and WebGPU
 

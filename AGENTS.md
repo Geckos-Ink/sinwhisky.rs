@@ -984,6 +984,14 @@ This initial unpublished API may evolve; document every behavior change.
   coder with LPC, gradient groups, SinWhisky anchors and automatic choices). On
   three 5 s excerpts lossless SWL2 is 7.7-11.0% smaller than FLAC; gradient and
   anchor layers paid only on a quiet passage with a tolerance (paper 6.2).
+- **To do (SWL2 correction layer):** add cascaded NLMS stages after the LPC in
+  [correction.rs](src/layered/correction.rs), as in OptimFROG/Monkey's Audio:
+  sign-sign or normalized LMS filters of decreasing length (e.g. 256, 32, 16 taps)
+  adapting sample by sample on the reconstructed history, in integer arithmetic so
+  the decoder stays exact on every platform. Keep the per-block choice by coded
+  size (signal the cascade in the block header, bump the SWL2 version and update
+  `docs/SWL2.md`), check lossless/bounded round trips in `tests/layered.rs`, and
+  remeasure the three excerpts against FLAC and the current LPC-only stream.
 
 ## Task start and handoff checklist
 
