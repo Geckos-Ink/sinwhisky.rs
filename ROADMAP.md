@@ -65,11 +65,21 @@
    reported value exact FAFT). Compare matched FFT/Goertzel and padded-FFT costs.
 4. Circle determination whose angular rates carry physical frequency. The current
    rates are geometric (aperture-dependent); circle-seeded search found only
-   41-43% of the peaks and was slower than the scan.
-5. Dense spectra are O(rotations × frequencies). Only consider butterfly/NUFFT-style
+   41-43% of the peaks and was slower than the scan. A rate is twice an inscribed
+   angle of the fitting triangle over the side's duration. At a symmetric crest of
+   a tone it matches the tone only when the aperture equals the tone's largest
+   central difference (tested). Find out whether any aperture rule works away from crests.
+5. Endpoint-form kernel. On an arc, `y'' = -rate^2*(y - center)`, so its
+   transform depends only on its end values and slopes, centre height and rate.
+   With prepared `sin(rate*L)` and `cos(rate*L) - 1`, this needs one real division
+   per arc instead of two. It also keeps relative accuracy for flat arcs; the
+   current moment form's rounding grows like eps*radius*length. Resonances
+   `omega = ±rate` need the existing series. Measure cost and accuracy on the
+   Beethoven windows, then regenerate the port vectors before switching.
+6. Dense spectra are O(rotations × frequencies). Only consider butterfly/NUFFT-style
    interpolation with a stated error bound and measured crossover size; no FFT
    speed claim exists today.
-6. Keep the sampled geometry/adaptive spectra, integral AFT and FFT phasor control
+7. Keep the sampled geometry/adaptive spectra, integral AFT and FFT phasor control
    as references. Their targets differ; zooming a predictor adds no observations.
 
 ## Earlier geometry-first focus (controls)

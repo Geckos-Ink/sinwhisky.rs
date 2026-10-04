@@ -25,9 +25,10 @@ See [design and provenance](docs/DESIGN.md), the included
 [2014 whitepaper](<docs/SinWhisky e FLT.pdf>), and the
 [agent reference](AGENTS.md).
 
-The [public FAFT manuscript](docs/PAPER_FAFT_public.md) also has an
-[inline-image version](docs/PAPER_FAFT_public-inline.md), with embedded SVG markup
-and a PNG data URI for sharing without separate figure files.
+The [FAFT manuscript](docs/PAPER_FAFT.md) derives the transform from circle
+geometry. It covers rates as inscribed angles, the line as the infinite-radius
+limit, the endpoint form, and time distance as phase. Its
+[web copy](docs/PAPER_FAFT-net.md) has the same text with absolute figure URLs.
 
 ## Build and try
 

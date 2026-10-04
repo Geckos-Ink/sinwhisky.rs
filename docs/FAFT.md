@@ -59,6 +59,24 @@ takes the integral AFT model unchanged. Neither refits anything.
 scale. It is not, in general, a frequency of the recorded sound; see
 [circle references](#circle-references-are-not-the-spectrum).
 
+### From the three points to the rotation
+
+Every rotation parameter follows from the triangle of the three fitting points
+P0, P1, P2 (horizontal coordinate = sample offset × aperture). The 2x2 centre
+system has determinant `8 × signed area`, so collinear points give the line
+limit. By the inscribed angle theorem, the side P0→P1 sweeps twice the
+triangle's angle at P2, and the side P1→P2 twice its angle at P0. Both are signed
+by the orientation: clockwise when P1 lies above the chord P0P2. Each sweep
+divided by its side's duration is that rotation's `rate`, and the law of sines
+gives `radius = |P0P2| / (2 sin(angle at P1))`. The horizontal centre and the
+aperture enter only through these angles. Because the two rates usually differ,
+the curve is continuous at P1 but its slope jumps there. A line is the
+infinite-radius limit: with the start value, start slope `d` and start angle
+fixed, `rate = d/(radius*cos(phase))` falls like 1/radius and the arc converges
+to `y0 + d*u`. Tests: `rotation_rates_are_twice_the_inscribed_angles_of_the_anchor_triangle`,
+`line_is_the_infinite_radius_limit_of_an_arc`. The derivation, with a figure,
+is in [PAPER_FAFT.md](PAPER_FAFT.md) section 2.
+
 ### The transform
 
 For a window `[p, q)` of duration `T = q - p` and any real `omega` (radians per
@@ -87,14 +105,49 @@ Phi(omega) = y0*E(-omega)
 FAFT(omega) = sum over rotations of exp(-i*omega*start) * Phi(omega)
 ```
 
-The anchored form avoids subtracting `center` and `radius` for flat, large-radius
-arcs. The Hann weighting is exact: `1/2*F(omega) - 1/4*F(omega - 2*pi/T) - 1/4*F(omega + 2*pi/T)`
-of the rectangular transform. There is no quadrature, sampling, FFT or refit.
+This is the transform of the rotating radius vector `zeta0 = b + i*a`: the centre
+gives `center*E(-omega)`, and the two counter-rotating halves of the radius give
+`(zeta0*E(rate-omega) - conj(zeta0)*E(-rate-omega))/(2i)`. Each half resonates
+at `omega = ±rate` with height `radius*length/2`. The time distance between
+rotations enters only through `exp(-i*omega*start)` (shift theorem). M identical
+rotations placed back to back give the element transform times a Dirichlet
+ratio, with peaks at the harmonics of their spacing whatever their rate
+(`identical_rotations_factor_into_element_and_array_terms`).
+
+On an arc, `y'' = -rate^2*(y - center)`. Two integrations by parts therefore
+give an equivalent **endpoint form**, which depends only on the end values and
+slopes, the centre height and the rate:
+
+```text
+Phi(omega) = [ (y'_L*q^L - y'_0) + i*omega*(y_L*q^L - y_0) - rate^2*center*E(-omega) ]
+             / (omega^2 - rate^2),        q = exp(-i*omega), omega != ±rate
+```
+
+Lines are the case `rate = 0`. Summed over a curve, the end terms of
+neighbouring rotations combine at each join into `J/(i*omega) + J'/(i*omega)^2`,
+where `J` and `J'` are the jumps in value and slope. This explains the 1/omega
+tails from value jumps and the 1/omega^2 decay from kinks, and the zoom rates
+below (`arc_transform_is_fixed_by_its_endpoints`).
+
+The anchored form starts from the evaluated start value and never forms `center`
+again, which for flat arcs is a large number nearly cancelling `radius*sin(phase)`.
+Its `a` and `b` terms still carry the radius, so the rounding error of one
+rotation is about `eps*radius*length`, the same order as the representation
+error of the stored circle. `GeometryFrame` rejects circles whose radius exceeds
+1e6 times the frame's peak amplitude. The Hann weighting is exact:
+`1/2*F(omega) - 1/4*F(omega - 2*pi/T) - 1/4*F(omega + 2*pi/T)` of the rectangular
+transform, with `+1/4` signs when the phase origin is the window centre (as in
+`derivatives`). There is no quadrature, sampling, FFT or refit.
 
 ### Rotate and add: the fast rule
 
-The FFT's rule is "multiply the current result by a rotation and add". FAFT uses
-the same rule with the circles' own angles instead of N-th roots of unity:
+FAFT multiplies a running phase by a unit complex number and adds each
+rotation's closed form. This evaluates `sum_k Phi_k(omega) * q^(start_k)` at one
+frequency, in the manner of Goertzel's single-bin recurrence. It is not the
+Cooley-Tukey factorization, which shares partial sums among all N bins of a
+fixed grid. FAFT shares nothing between frequencies. It also cannot go through
+an FFT of the samples, because the fitted curve is a nonlinear function of the
+samples. The speed comes from the following:
 
 - `exp(i*rate*length)` depends only on the circle, so it is prepared once.
 - For a query, `q = exp(-i*omega)` costs one sin/cos pair. Powers `q^L` are built
@@ -152,7 +205,10 @@ weighted by its resonant lobe height `radius*weighted_length/2`, and groups the
 rates. It costs O(R log R) and evaluates no transform. It was tested as a seed source
 (`circle_seeds`) because continuous frequency references were the original idea
 behind AFT. Measured on music, it is neither complete nor cheaper. Circle rates
-depend on the aperture scale chosen during fitting. In an exploratory synthetic
+depend on the aperture scale chosen during fitting. For three samples on a crest
+of `A*cos(w0*t)` with drop `h`, the rate is `-2*atan(h/aperture)`. It equals the
+tone only for aperture `A*sin(w0)`, while the range aperture gives `-pi/2` for
+every crest (tested). In an exploratory synthetic
 frame whose strongest tone was 0.0731 rad/sample, the five heaviest rate groups
 lay at 0.018–0.048, all below the tone. The spectrum's peaks come from all
 rotations interfering, not from any single rate. The continuous frequencies are
@@ -337,3 +393,8 @@ and adaptive modules keep their names and behaviour as sampled-predictor control
   test bounds that certify no peak above the floor was missed.
 - Circle determination whose angular rates carry physical frequency, so that
   references could seed peaks. The current rates do not.
+- An endpoint-form kernel: evaluate each arc's deviation from its start value with
+  the endpoint form and prepared `sin(rate*L)` and `cos(rate*L) - 1`. It needs one
+  real division per arc instead of two, and keeps relative accuracy for flat
+  arcs away from `omega = ±rate`. Near resonance it must fall back to the moment
+  series. Adopting it requires new measurements and regenerated port vectors.

@@ -1,15 +1,36 @@
 use sinwhisky::aft::AngularFrame;
 use sinwhisky::faft::{CircleCurve, PeakParams, Rotation, Weighting};
 use sinwhisky::geometric_faft::{GeometryFrame, GeometryParams, HierarchyParams};
+use sinwhisky::geometry::Point;
 use sinwhisky::spectral::Complex;
-use sinwhisky::{AnalysisParams, Error};
-use std::f64::consts::{PI, TAU};
+use sinwhisky::{Analysis, AnalysisParams, Aperture, Error, Primitive};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 fn distance(a: Complex, b: Complex) -> f64 {
     (a.re - b.re).hypot(a.im - b.im)
 }
 fn magnitude(a: Complex) -> f64 {
     a.re.hypot(a.im)
+}
+fn product(a: Complex, b: Complex) -> Complex {
+    Complex {
+        re: a.re * b.re - a.im * b.im,
+        im: a.re * b.im + a.im * b.re,
+    }
+}
+fn quotient(a: Complex, b: Complex) -> Complex {
+    let d = b.re * b.re + b.im * b.im;
+    Complex {
+        re: (a.re * b.re + a.im * b.im) / d,
+        im: (a.im * b.re - a.re * b.im) / d,
+    }
+}
+/// exp(-i*angle).
+fn delay(angle: f64) -> Complex {
+    Complex {
+        re: angle.cos(),
+        im: -angle.sin(),
+    }
 }
 
 /// Gauss-Legendre nodes/weights on [-1,1], computed independently by Newton.
@@ -184,6 +205,235 @@ fn analytic_derivatives_match_finite_differences() {
                 "{weighting:?} {omega}"
             );
         }
+    }
+}
+
+#[test]
+fn rotation_rates_are_twice_the_inscribed_angles_of_the_anchor_triangle() {
+    // PAPER_FAFT.md section 2: the sweeps are 2*gamma_2 and 2*gamma_0, signed by the
+    // orientation of P0 P1 P2, and r = |P0 P2| / (2 sin gamma_1). Unit aperture.
+    let unit = AnalysisParams {
+        aperture: Aperture::Disabled,
+        ..AnalysisParams::default()
+    };
+    let samples = [0.3, 1.9, -0.4, -2.2, 0.7, 3.1, 2.9, -1.0, 0.05, 0.6];
+    let analysis = Analysis::new(&samples, unit).unwrap();
+    let interior = |p: Point, q: Point, r: Point| {
+        let (u, v) = ((q.x - p.x, q.y - p.y), (r.x - p.x, r.y - p.y));
+        (u.0 * v.1 - u.1 * v.0).abs().atan2(u.0 * v.0 + u.1 * v.1)
+    };
+    let mut circles = 0;
+    for (i, model) in analysis.models().iter().enumerate() {
+        let Primitive::Circle(c) = model.primitive else {
+            continue;
+        };
+        let p = [-1.0, 0.0, 1.0].map(|x| Point {
+            x,
+            y: samples[(i as f64 + 1.0 + x) as usize],
+        });
+        let orientation = ((p[1].x - p[0].x) * (p[2].y - p[1].y)
+            - (p[1].y - p[0].y) * (p[2].x - p[1].x))
+            .signum();
+        let gamma = [
+            interior(p[0], p[1], p[2]),
+            interior(p[1], p[2], p[0]),
+            interior(p[2], p[0], p[1]),
+        ];
+        assert!((c.angles[1] - c.angles[0] - orientation * 2.0 * gamma[2]).abs() < 1e-12);
+        assert!((c.angles[2] - c.angles[1] - orientation * 2.0 * gamma[0]).abs() < 1e-12);
+        let chord = (p[2].x - p[0].x).hypot(p[2].y - p[0].y);
+        assert!((c.circle.radius - chord / (2.0 * gamma[1].sin())).abs() < 1e-10 * c.circle.radius);
+        circles += 1;
+    }
+    assert_eq!(circles, samples.len() - 2);
+
+    // Three samples on a crest of a*cos(w0*t): the rate is -2*atan(h/aperture), h the
+    // drop. It equals the tone only for aperture a*sin(w0); the range aperture always
+    // gives a quarter turn per sample, so circle rates are not signal frequencies.
+    let (a, w0) = (1000.0, 0.05_f64);
+    let crest = [a * w0.cos(), a, a * w0.cos()];
+    let rate = |aperture| {
+        let params = AnalysisParams {
+            aperture,
+            ..AnalysisParams::default()
+        };
+        let Primitive::Circle(c) = Analysis::new(&crest, params).unwrap().models()[0].primitive
+        else {
+            panic!("crest must fit a circle")
+        };
+        c.angles[1] - c.angles[0]
+    };
+    let matched = a * w0.sin();
+    let fixed = |alpha| Aperture::Adaptive {
+        gain: 0.0,
+        min: alpha,
+        max: alpha,
+    };
+    assert!((rate(fixed(matched)) + w0).abs() < 1e-12);
+    // Apertures near the 1.25 drop square amplitudes near 1000 in the 2x2 system.
+    assert!((rate(Aperture::SignalRange) + FRAC_PI_2).abs() < 1e-9);
+    let h = a * (1.0 - w0.cos());
+    assert!((rate(Aperture::Disabled) + 2.0 * h.atan()).abs() < 1e-9);
+}
+
+#[test]
+fn arc_transform_is_fixed_by_its_endpoints() {
+    // PAPER_FAFT.md Proposition 2: y'' = -rate^2*(y - center) on a rotation, so its
+    // transform needs only the end values and slopes, the centre height and the rate:
+    // [(y'_L q - y'_0) + i*omega*(y_L q - y_0) - rate^2*center*E0(-omega)] / (omega^2 - rate^2)
+    // with q = exp(-i*omega*L). A line is the case rate = 0 (omega != 0).
+    let cases = [
+        (0.5, 1.7, 0.2, 0.9, 0.0, 3),
+        (-0.3, 2.0, 2.4, -1.3, 0.0, 2),
+        (0.1, 0.4, -0.7, 2.9, 0.0, 1),
+        (7.0, 120.0, 1.1, 0.05, 0.0, 9),
+        (0.8, 0.0, 0.0, 0.0, -0.21, 5),
+    ];
+    for (center, radius, phase, rate, slope, length) in cases {
+        let rotation = Rotation {
+            start: 0,
+            length,
+            center,
+            radius,
+            phase,
+            rate,
+            slope,
+        };
+        let faft = CircleCurve::new(vec![rotation])
+            .unwrap()
+            .transform(0..length, Weighting::Rectangular)
+            .unwrap();
+        let l = length as f64;
+        let value = |u: f64| center + radius * (phase + rate * u).sin() + slope * u;
+        let tangent = |u: f64| radius * rate * (phase + rate * u).cos() + slope;
+        for omega in [0.0, 0.37, -1.1, 2.2, PI, 7.7] {
+            if (omega * omega - rate * rate).abs() < 1e-2 {
+                continue;
+            }
+            let q = delay(omega * l);
+            // E0(-omega) = i*(q - 1)/omega, or L at omega = 0.
+            let dc = if omega == 0.0 {
+                Complex { re: l, im: 0.0 }
+            } else {
+                Complex {
+                    re: -q.im / omega,
+                    im: (q.re - 1.0) / omega,
+                }
+            };
+            let (y0, yl, d0, dl) = (value(0.0), value(l), tangent(0.0), tangent(l));
+            let curvature = rate * rate * center;
+            let numerator = Complex {
+                re: dl * q.re - d0 - omega * yl * q.im - curvature * dc.re,
+                im: dl * q.im + omega * (yl * q.re - y0) - curvature * dc.im,
+            };
+            let denominator = omega * omega - rate * rate;
+            let expected = Complex {
+                re: numerator.re / denominator,
+                im: numerator.im / denominator,
+            };
+            let actual = faft.integral(omega).unwrap();
+            assert!(
+                distance(actual, expected) < 1e-12 * (1.0 + magnitude(expected)),
+                "rate={rate} omega={omega}: {actual:?} vs {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn line_is_the_infinite_radius_limit_of_an_arc() {
+    // PAPER_FAFT.md section 2.5: fix the start value y0, start slope d and start angle;
+    // as the radius grows the rate d/(r*cos(phase)) vanishes and the arc's transform
+    // approaches the line's, with an error that falls like 1/r.
+    let (y0, d, phase, length) = (0.7, -0.21, 0.3_f64, 5);
+    let transform = |rotation| {
+        CircleCurve::new(vec![rotation])
+            .unwrap()
+            .transform(0..length, Weighting::Rectangular)
+            .unwrap()
+    };
+    let line = transform(Rotation {
+        start: 0,
+        length,
+        center: y0,
+        radius: 0.0,
+        phase: 0.0,
+        rate: 0.0,
+        slope: d,
+    });
+    for omega in [0.0, 0.9, -2.3, 4.0] {
+        let target = line.integral(omega).unwrap();
+        let errors: Vec<f64> = [1e1, 1e2, 1e3, 1e4]
+            .iter()
+            .map(|&radius| {
+                let arc = transform(Rotation {
+                    start: 0,
+                    length,
+                    center: y0 - radius * phase.sin(),
+                    radius,
+                    phase,
+                    rate: d / (radius * phase.cos()),
+                    slope: 0.0,
+                });
+                distance(arc.integral(omega).unwrap(), target)
+            })
+            .collect();
+        for pair in errors.windows(2) {
+            let ratio = pair[0] / pair[1];
+            assert!((8.0..12.5).contains(&ratio), "{omega}: {errors:?}");
+        }
+        assert!(errors[3] < 1e-4 * (1.0 + magnitude(target)), "{errors:?}");
+    }
+}
+
+#[test]
+fn identical_rotations_factor_into_element_and_array_terms() {
+    // PAPER_FAFT.md Remark 2: M copies of one rotation, back to back, transform to the
+    // element's transform times the Dirichlet ratio of the time shifts. The narrow
+    // peaks sit at the harmonics 2*pi*j/L of the spacing, whatever the circle's rate.
+    let (length, count) = (4, 9);
+    let piece = |start| Rotation {
+        start,
+        length,
+        center: 0.2,
+        radius: 1.3,
+        phase: 0.4,
+        rate: 0.8,
+        slope: 0.0,
+    };
+    let element = CircleCurve::new(vec![piece(0)])
+        .unwrap()
+        .transform(0..length, Weighting::Rectangular)
+        .unwrap();
+    let train = CircleCurve::new((0..count).map(|k| piece(k * length)).collect())
+        .unwrap()
+        .transform(0..length * count, Weighting::Rectangular)
+        .unwrap();
+    let one = Complex { re: 1.0, im: 0.0 };
+    let minus = |a: Complex, b: Complex| Complex {
+        re: a.re - b.re,
+        im: a.im - b.im,
+    };
+    for omega in [0.3, 1.1, 2.0, 2.9, 5.3, -0.7] {
+        let array = quotient(
+            minus(one, delay(omega * (length * count) as f64)),
+            minus(one, delay(omega * length as f64)),
+        );
+        let expected = product(element.integral(omega).unwrap(), array);
+        let actual = train.integral(omega).unwrap();
+        assert!(
+            distance(actual, expected) < 1e-12 * (1.0 + magnitude(expected)),
+            "{omega}"
+        );
+    }
+    for j in 1..4 {
+        let omega = TAU * j as f64 / length as f64;
+        let phi = element.integral(omega).unwrap();
+        let expected = Complex {
+            re: phi.re * count as f64,
+            im: phi.im * count as f64,
+        };
+        assert!(distance(train.integral(omega).unwrap(), expected) < 1e-12 * magnitude(expected));
     }
 }
 

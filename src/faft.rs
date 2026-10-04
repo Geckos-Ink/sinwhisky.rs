@@ -91,10 +91,11 @@ fn checked(a: Complex) -> Result<Complex, Error> {
 
 /// One finite rotation of a circle-determined curve, in amplitude units:
 /// `y(u) = center + radius*sin(phase + rate*u) + slope*u` for `0 <= u < length`,
-/// with `u` measured from `start` in source samples. A line is `radius = 0`.
-/// This is the circle itself (center height, radius, starting angle, angular
-/// rate), not an FFT coefficient. `rate` is a geometric angular speed and need
-/// not equal a physical frequency of the recorded sound.
+/// with `u` measured from `start` in source samples. A line is `radius = 0`, the
+/// infinite-radius limit kept explicit. This is the circle itself (center height,
+/// radius, starting angle, angular rate), not an FFT coefficient. For a fitted
+/// circle, `rate*length` is the side's sweep, twice an inscribed angle of the three
+/// fitting points, so `rate` is geometric and need not be a physical frequency.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rotation {
     pub start: usize,
