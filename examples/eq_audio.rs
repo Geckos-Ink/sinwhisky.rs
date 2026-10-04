@@ -17,11 +17,20 @@
 //!   --window 2048         analysis window T (hop T/2)
 //!   --upper 2000          highest analysed (tonal) frequency
 //!   --max-error 16        circle-curve tolerance, PCM16 units
-//!   --tolerance 0,16      compress: error bounds to encode (one stream each)
-//!   --precision 4         compress: tonal parameter precision, PCM16 units
+//!   --tolerance 0,16      compress: error bounds, one automatic SWL2 stream each
+//!   --search fast|full    compress: fast tries stereo modes, LPC orders and
+//!                         block sizes; full also tries gradient and anchor layers
+//!                         (each channel's tone analysis makes it slower)
+//!   --parametric 16       compress: also a parametric stream (gradient groups
+//!                         below --upper at this precision, no correction layer),
+//!                         to listen to the "series of gradients" alone
+//!   --parametric-anchors 256   add SinWhisky anchors (this tolerance) to it
 //! Timings are wall-clock on this machine and are reported, not asserted.
 use sinwhisky::bands::{divide, equalize, extrude, BandSplit, Crossover, ToneAnalysis, ToneParams};
-use sinwhisky::layered::{decode, encode, LayeredParams};
+use sinwhisky::layered::{
+    decode, encode, encode_auto, AnchorConfig, AutoParams, ChannelConfig, GradientConfig, Stereo,
+    StreamConfig, PARAMETRIC,
+};
 use std::f64::consts::{PI, TAU};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -37,7 +46,9 @@ struct Options {
     upper: f64,
     max_error: f64,
     tolerances: Vec<u32>,
-    precision: f64,
+    full: bool,
+    parametric: Option<f64>,
+    parametric_anchors: Option<f64>,
 }
 
 fn list<T: std::str::FromStr>(text: &str) -> Result<Vec<T>, String> {
@@ -61,7 +72,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
         upper: 2000.0,
         max_error: 16.0,
         tolerances: vec![0, 16],
-        precision: 4.0,
+        full: false,
+        parametric: None,
+        parametric_anchors: None,
     };
     let mut i = 0;
     while i < args.len() {
@@ -91,7 +104,15 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--upper" => o.upper = one(value)?,
             "--max-error" => o.max_error = one(value)?,
             "--tolerance" => o.tolerances = list(value)?,
-            "--precision" => o.precision = one(value)?,
+            "--search" => {
+                o.full = match value.as_str() {
+                    "fast" => false,
+                    "full" => true,
+                    _ => return Err("--search is fast or full".into()),
+                }
+            }
+            "--parametric" => o.parametric = Some(one(value)?),
+            "--parametric-anchors" => o.parametric_anchors = Some(one(value)?),
             other => return Err(format!("unknown option {other}")),
         }
         i += 2;
@@ -128,6 +149,15 @@ fn write_wav(path: &Path, channels: &[Vec<f64>], rate: u32) -> Result<usize, Str
     }
     std::fs::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(clipped)
+}
+
+/// JSON has no infinity (a lossless SNR): write null.
+fn json_number(v: f64) -> String {
+    if v.is_finite() {
+        format!("{v:.2}")
+    } else {
+        "null".into()
+    }
 }
 
 fn rms(x: &[f64]) -> f64 {
@@ -343,70 +373,146 @@ fn run() -> Result<(), String> {
 
     if matches!(command, "compress" | "all") {
         let pcm_bytes = frames * channels * 2;
+        let seconds = frames as f64 / f64::from(rate);
+        let to_hz = |w: f64| w * f64::from(rate) / TAU;
         let mut runs = Vec::new();
-        for &tolerance in &o.tolerances {
-            for tonal in [true, false] {
-                let started = Instant::now();
-                let params = LayeredParams {
-                    tolerance,
-                    tone_precision: o.precision,
-                    tonal_upper: hz(o.upper),
-                    ..LayeredParams::default()
-                };
-                let mut total = 0;
-                let (mut tonal_bytes, mut correction_bytes, mut tracks, mut breakpoints) =
-                    (0, 0, 0, 0);
-                let (mut worst, mut written, mut residual) = (0, 0, 0.0);
-                let mut decoded = Vec::new();
-                for (c, (x, a)) in pcm.iter().zip(&analyses).enumerate() {
-                    let encoded = encode(x, tonal.then_some(a), params).map_err(e)?;
-                    let back = decode(&encoded.bytes).map_err(e)?;
-                    if back != encoded.decoded {
-                        return Err("decoder did not reproduce the encoder".into());
-                    }
-                    let s = encoded.stats;
-                    if s.max_error > tolerance {
-                        return Err("error bound violated".into());
-                    }
-                    if tonal {
-                        let name = format!("tolerance-{tolerance}-channel-{}.swl1", c + 1);
-                        std::fs::write(output.join(name), &encoded.bytes)
-                            .map_err(|e| e.to_string())?;
-                    }
-                    total += s.total_bytes;
-                    tonal_bytes += s.tonal_bytes;
-                    correction_bytes += s.correction_bytes;
-                    tracks += s.tracks;
-                    breakpoints += s.breakpoints;
-                    worst = worst.max(s.max_error);
-                    written += s.written;
-                    residual += s.residual_rms * s.residual_rms * s.samples as f64;
-                    decoded.push(back.iter().map(|&v| f64::from(v)).collect::<Vec<f64>>());
-                }
-                if tonal {
-                    write_wav(
-                        &output.join(format!("decoded-tolerance-{tolerance}.wav")),
-                        &decoded,
-                        rate,
-                    )?;
-                }
-                runs.push(format!(
-                    "{{\"tolerance\":{tolerance},\"tonal_layer\":{tonal},\"bytes\":{total},\"percent_of_pcm\":{:.2},\
-                     \"kbps\":{:.1},\"tonal_bytes\":{tonal_bytes},\"correction_bytes\":{correction_bytes},\
-                     \"tracks\":{tracks},\"breakpoints\":{breakpoints},\"written_fraction\":{:.4},\
-                     \"residual_rms\":{:.2},\"max_error\":{worst},\"seconds\":{:.3}}}",
-                    100.0 * total as f64 / pcm_bytes as f64,
-                    8.0 * total as f64 / (frames as f64 / f64::from(rate)) / 1000.0,
-                    written as f64 / (frames * channels) as f64,
-                    (residual / (frames * channels) as f64).sqrt(),
-                    started.elapsed().as_secs_f64()
-                ));
+        let check = |bytes: &[u8], decoded: &[Vec<i32>]| -> Result<Vec<Vec<f64>>, String> {
+            let back = decode(bytes).map_err(e)?;
+            if back != decoded {
+                return Err("decoder did not reproduce the encoder".into());
             }
+            Ok(back
+                .iter()
+                .map(|c| c.iter().map(|&v| f64::from(v)).collect())
+                .collect())
+        };
+        let describe = |c: &ChannelConfig| {
+            let g = c.gradients.map_or("null".to_string(), |g| {
+                format!(
+                    "{{\"band_hz\":[{:.0},{:.0}],\"precision\":{},\"segment_tolerance\":{}}}",
+                    to_hz(g.lower),
+                    to_hz(g.upper),
+                    g.precision,
+                    g.segment_tolerance
+                )
+            });
+            let a = c.anchors.map_or("null".to_string(), |a| {
+                format!(
+                    "{{\"cutoff_hz\":{},\"tolerance\":{}}}",
+                    a.cutoff
+                        .map_or("null".to_string(), |w| format!("{:.0}", to_hz(w))),
+                    a.tolerance
+                )
+            });
+            format!(
+                "\"gradients\":{g},\"anchors\":{a},\"block\":{}",
+                1 << c.block_exponent
+            )
+        };
+        for &tolerance in &o.tolerances {
+            let started = Instant::now();
+            let auto = AutoParams {
+                tolerance,
+                tones: params,
+                gradients: o.full,
+                anchors: o.full,
+            };
+            let (encoded, trials) = encode_auto(&pcm, &auto).map_err(e)?;
+            let decoded = check(&encoded.bytes, &encoded.decoded)?;
+            if encoded.stats.max_error > tolerance {
+                return Err("error bound violated".into());
+            }
+            std::fs::write(
+                output.join(format!("tolerance-{tolerance}.swl2")),
+                &encoded.bytes,
+            )
+            .map_err(|e| e.to_string())?;
+            if tolerance > 0 {
+                write_wav(
+                    &output.join(format!("decoded-tolerance-{tolerance}.wav")),
+                    &decoded,
+                    rate,
+                )?;
+            }
+            let s = &encoded.stats;
+            let per_channel: Vec<String> = s
+                .channels
+                .iter()
+                .zip(&encoded.config.channels)
+                .map(|(c, cfg)| {
+                    format!(
+                        "{{{},\"gradient_bytes\":{},\"anchor_bytes\":{},\"correction_bytes\":{},\"mean_order\":{:.2},\"mean_gain\":{:.2},\"written_fraction\":{:.4}}}",
+                        describe(cfg),
+                        c.gradient_bytes,
+                        c.anchor_bytes,
+                        c.correction_bytes,
+                        c.mean_order,
+                        c.mean_gain,
+                        c.written as f64 / frames as f64
+                    )
+                })
+                .collect();
+            runs.push(format!(
+                "{{\"tolerance\":{tolerance},\"search\":\"{}\",\"bytes\":{},\"percent_of_pcm\":{:.2},\"kbps\":{:.1},\"stereo\":\"{:?}\",\"max_error\":{},\"snr_db\":{},\"trials\":{},\"seconds\":{:.3},\"channels\":[{}]}}",
+                if o.full { "full" } else { "fast" },
+                s.total_bytes,
+                100.0 * s.total_bytes as f64 / pcm_bytes as f64,
+                8.0 * s.total_bytes as f64 / seconds / 1000.0,
+                encoded.config.stereo,
+                s.max_error,
+                json_number(s.snr_db),
+                trials.len(),
+                started.elapsed().as_secs_f64(),
+                per_channel.join(",")
+            ));
+        }
+        if let Some(precision) = o.parametric {
+            let started = Instant::now();
+            let channel = ChannelConfig {
+                gradients: Some(GradientConfig {
+                    lower: 0.0,
+                    upper: hz(o.upper),
+                    precision,
+                    segment_tolerance: 2.0 * precision,
+                    min_amplitude: 0.0,
+                    max_jump_bins: 1.0,
+                }),
+                anchors: o.parametric_anchors.map(|tolerance| AnchorConfig {
+                    cutoff: None,
+                    tolerance,
+                    step: (0.25 * tolerance).max(1.0),
+                    max_gap: 1024,
+                }),
+                ..ChannelConfig::default()
+            };
+            let config = StreamConfig {
+                tolerance: PARAMETRIC,
+                stereo: Stereo::Independent,
+                channels: vec![channel; channels],
+            };
+            let refs: Vec<_> = analyses.iter().map(Some).collect();
+            let encoded = encode(&pcm, &refs, &config).map_err(e)?;
+            let decoded = check(&encoded.bytes, &encoded.decoded)?;
+            std::fs::write(output.join("parametric.swl2"), &encoded.bytes)
+                .map_err(|e| e.to_string())?;
+            write_wav(&output.join("decoded-parametric.wav"), &decoded, rate)?;
+            let s = &encoded.stats;
+            runs.push(format!(
+                "{{\"tolerance\":\"parametric\",\"precision\":{precision},\"anchor_tolerance\":{},\"bytes\":{},\"percent_of_pcm\":{:.2},\"kbps\":{:.1},\"snr_db\":{:.2},\"groups\":{},\"members\":{},\"anchors\":{},\"seconds\":{:.3}}}",
+                o.parametric_anchors.map_or("null".to_string(), |t| t.to_string()),
+                s.total_bytes,
+                100.0 * s.total_bytes as f64 / pcm_bytes as f64,
+                8.0 * s.total_bytes as f64 / seconds / 1000.0,
+                s.snr_db,
+                s.channels.iter().map(|c| c.groups).sum::<usize>(),
+                s.channels.iter().map(|c| c.members).sum::<usize>(),
+                s.channels.iter().map(|c| c.anchors).sum::<usize>(),
+                started.elapsed().as_secs_f64()
+            ));
         }
         write!(
             report,
-            ",\"compress\":{{\"pcm_bytes\":{pcm_bytes},\"precision\":{},\"runs\":[{}]}}",
-            o.precision,
+            ",\"compress\":{{\"pcm_bytes\":{pcm_bytes},\"runs\":[{}]}}",
             runs.join(",")
         )
         .unwrap();

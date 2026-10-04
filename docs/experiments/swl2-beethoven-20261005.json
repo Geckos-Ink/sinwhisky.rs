@@ -1,0 +1,618 @@
+{
+ "description": "SWL2 (docs/SWL2.md): LPC correction with layer side information, frequency-gradient groups, SinWhisky anchors, automatic choice by exact coded size, and a parametric stream (gradients up to 6 kHz at precision 16 plus anchors at tolerance 256, no correction). Aggregate reports of examples/eq_audio.rs via test_music.sh; no audio. Timings are wall-clock on one arm64 laptop (Rust 1.98.1), machine-specific.",
+ "source": "Beethoven recording (44.1 kHz stereo MP3, 320 kbps), decoded to PCM16, 5 s excerpts at 60, 180 and 300 s (882,000 PCM bytes each)",
+ "commands": [
+  "./test_music.sh compress INPUT OUT --start S --seconds 5 --search full --upper 6000 --tolerance 0,16,128 --parametric 16 --parametric-anchors 256",
+  "./test_music.sh compress INPUT OUT --start 180 --seconds 5 --search fast --tolerance 0,16,128"
+ ],
+ "excerpts": {
+  "60": {
+   "flac_bytes": 328541,
+   "full": {
+    "command": "compress",
+    "channels": 2,
+    "rate": 44100,
+    "frames": 220500,
+    "seconds": 5.0,
+    "window": 2048,
+    "upper_hz": 6000,
+    "max_error": 16,
+    "analysis": {
+     "seconds": 19.593,
+     "tones_per_frame": 45.85,
+     "rotations": 180522,
+     "explained": [
+      0.93548,
+      0.93842
+     ],
+     "curve_max_error": 15.984
+    },
+    "compress": {
+     "pcm_bytes": 882000,
+     "runs": [
+      {
+       "tolerance": 0,
+       "search": "full",
+       "bytes": 303109,
+       "percent_of_pcm": 34.37,
+       "kbps": 485.0,
+       "stereo": "Independent",
+       "max_error": 0,
+       "snr_db": null,
+       "trials": 42,
+       "seconds": 56.488,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 4096,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 153286,
+         "mean_order": 20.07,
+         "mean_gain": 1.0,
+         "written_fraction": 0.9463
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 149795,
+         "mean_order": 25.48,
+         "mean_gain": 1.0,
+         "written_fraction": 0.9415
+        }
+       ]
+      },
+      {
+       "tolerance": 16,
+       "search": "full",
+       "bytes": 125756,
+       "percent_of_pcm": 14.26,
+       "kbps": 201.2,
+       "stereo": "Independent",
+       "max_error": 16,
+       "snr_db": 48.51,
+       "trials": 42,
+       "seconds": 50.822,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 4096,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 64226,
+         "mean_order": 11.56,
+         "mean_gain": 1.0,
+         "written_fraction": 0.6015
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 4096,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 61502,
+         "mean_order": 10.93,
+         "mean_gain": 1.0,
+         "written_fraction": 0.5791
+        }
+       ]
+      },
+      {
+       "tolerance": 128,
+       "search": "full",
+       "bytes": 62856,
+       "percent_of_pcm": 7.13,
+       "kbps": 100.6,
+       "stereo": "Independent",
+       "max_error": 128,
+       "snr_db": 30.78,
+       "trials": 42,
+       "seconds": 48.365,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 31929,
+         "mean_order": 13.04,
+         "mean_gain": 1.0,
+         "written_fraction": 0.2901
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 30899,
+         "mean_order": 14.0,
+         "mean_gain": 1.0,
+         "written_fraction": 0.2781
+        }
+       ]
+      },
+      {
+       "tolerance": "parametric",
+       "precision": 16,
+       "anchor_tolerance": 256,
+       "bytes": 158755,
+       "percent_of_pcm": 18.0,
+       "kbps": 254.0,
+       "snr_db": 28.95,
+       "groups": 1599,
+       "members": 10338,
+       "anchors": 37095,
+       "seconds": 0.554
+      }
+     ]
+    }
+   }
+  },
+  "180": {
+   "flac_bytes": 230035,
+   "full": {
+    "command": "compress",
+    "channels": 2,
+    "rate": 44100,
+    "frames": 220500,
+    "seconds": 5.0,
+    "window": 2048,
+    "upper_hz": 6000,
+    "max_error": 16,
+    "analysis": {
+     "seconds": 7.235,
+     "tones_per_frame": 31.51,
+     "rotations": 72476,
+     "explained": [
+      0.97151,
+      0.97375
+     ],
+     "curve_max_error": 15.984
+    },
+    "compress": {
+     "pcm_bytes": 882000,
+     "runs": [
+      {
+       "tolerance": 0,
+       "search": "full",
+       "bytes": 204765,
+       "percent_of_pcm": 23.22,
+       "kbps": 327.6,
+       "stereo": "Independent",
+       "max_error": 0,
+       "snr_db": null,
+       "trials": 42,
+       "seconds": 38.717,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 103542,
+         "mean_order": 20.15,
+         "mean_gain": 1.0,
+         "written_fraction": 0.8672
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 101195,
+         "mean_order": 21.78,
+         "mean_gain": 1.0,
+         "written_fraction": 0.8608
+        }
+       ]
+      },
+      {
+       "tolerance": 16,
+       "search": "full",
+       "bytes": 62305,
+       "percent_of_pcm": 7.06,
+       "kbps": 99.7,
+       "stereo": "Independent",
+       "max_error": 16,
+       "snr_db": 33.99,
+       "trials": 50,
+       "seconds": 41.801,
+       "channels": [
+        {
+         "gradients": {
+          "band_hz": [
+           375,
+           3000
+          ],
+          "precision": 128,
+          "segment_tolerance": 256
+         },
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 438,
+         "anchor_bytes": 0,
+         "correction_bytes": 31512,
+         "mean_order": 10.81,
+         "mean_gain": 0.85,
+         "written_fraction": 0.2762
+        },
+        {
+         "gradients": {
+          "band_hz": [
+           375,
+           3000
+          ],
+          "precision": 128,
+          "segment_tolerance": 256
+         },
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 417,
+         "anchor_bytes": 0,
+         "correction_bytes": 29900,
+         "mean_order": 11.11,
+         "mean_gain": 0.69,
+         "written_fraction": 0.2546
+        }
+       ]
+      },
+      {
+       "tolerance": 128,
+       "search": "full",
+       "bytes": 22580,
+       "percent_of_pcm": 2.56,
+       "kbps": 36.1,
+       "stereo": "Independent",
+       "max_error": 128,
+       "snr_db": 16.77,
+       "trials": 50,
+       "seconds": 38.991,
+       "channels": [
+        {
+         "gradients": {
+          "band_hz": [
+           0,
+           3000
+          ],
+          "precision": 64,
+          "segment_tolerance": 128
+         },
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 2271,
+         "anchor_bytes": 0,
+         "correction_bytes": 9159,
+         "mean_order": 3.85,
+         "mean_gain": 1.0,
+         "written_fraction": 0.0463
+        },
+        {
+         "gradients": {
+          "band_hz": [
+           0,
+           3000
+          ],
+          "precision": 64,
+          "segment_tolerance": 128
+         },
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 2467,
+         "anchor_bytes": 0,
+         "correction_bytes": 8645,
+         "mean_order": 4.07,
+         "mean_gain": 1.0,
+         "written_fraction": 0.0428
+        }
+       ]
+      },
+      {
+       "tolerance": "parametric",
+       "precision": 16,
+       "anchor_tolerance": 256,
+       "bytes": 27168,
+       "percent_of_pcm": 3.08,
+       "kbps": 43.5,
+       "snr_db": 14.33,
+       "groups": 1611,
+       "members": 2941,
+       "anchors": 3773,
+       "seconds": 0.2
+      }
+     ]
+    }
+   },
+   "fast": {
+    "command": "compress",
+    "channels": 2,
+    "rate": 44100,
+    "frames": 220500,
+    "seconds": 5.0,
+    "window": 2048,
+    "upper_hz": 2000,
+    "max_error": 16,
+    "analysis": {
+     "seconds": 4.248,
+     "tones_per_frame": 24.53,
+     "rotations": 72476,
+     "explained": [
+      0.96978,
+      0.97226
+     ],
+     "curve_max_error": 15.984
+    },
+    "compress": {
+     "pcm_bytes": 882000,
+     "runs": [
+      {
+       "tolerance": 0,
+       "search": "fast",
+       "bytes": 204765,
+       "percent_of_pcm": 23.22,
+       "kbps": 327.6,
+       "stereo": "Independent",
+       "max_error": 0,
+       "snr_db": null,
+       "trials": 6,
+       "seconds": 3.218,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 103542,
+         "mean_order": 20.15,
+         "mean_gain": 1.0,
+         "written_fraction": 0.8672
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 101195,
+         "mean_order": 21.78,
+         "mean_gain": 1.0,
+         "written_fraction": 0.8608
+        }
+       ]
+      },
+      {
+       "tolerance": 16,
+       "search": "fast",
+       "bytes": 63423,
+       "percent_of_pcm": 7.19,
+       "kbps": 101.5,
+       "stereo": "Independent",
+       "max_error": 16,
+       "snr_db": 33.99,
+       "trials": 6,
+       "seconds": 1.812,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 32545,
+         "mean_order": 15.7,
+         "mean_gain": 1.0,
+         "written_fraction": 0.2878
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 30850,
+         "mean_order": 11.41,
+         "mean_gain": 1.0,
+         "written_fraction": 0.2679
+        }
+       ]
+      },
+      {
+       "tolerance": 128,
+       "search": "fast",
+       "bytes": 27176,
+       "percent_of_pcm": 3.08,
+       "kbps": 43.5,
+       "stereo": "Independent",
+       "max_error": 128,
+       "snr_db": 16.53,
+       "trials": 6,
+       "seconds": 1.681,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 13825,
+         "mean_order": 8.63,
+         "mean_gain": 1.0,
+         "written_fraction": 0.0794
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 13323,
+         "mean_order": 7.63,
+         "mean_gain": 1.0,
+         "written_fraction": 0.0758
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  "300": {
+   "flac_bytes": 415142,
+   "full": {
+    "command": "compress",
+    "channels": 2,
+    "rate": 44100,
+    "frames": 220500,
+    "seconds": 5.0,
+    "window": 2048,
+    "upper_hz": 6000,
+    "max_error": 16,
+    "analysis": {
+     "seconds": 36.318,
+     "tones_per_frame": 57.87,
+     "rotations": 272210,
+     "explained": [
+      0.92649,
+      0.93106
+     ],
+     "curve_max_error": 15.984
+    },
+    "compress": {
+     "pcm_bytes": 882000,
+     "runs": [
+      {
+       "tolerance": 0,
+       "search": "full",
+       "bytes": 380505,
+       "percent_of_pcm": 43.14,
+       "kbps": 608.8,
+       "stereo": "Independent",
+       "max_error": 0,
+       "snr_db": null,
+       "trials": 42,
+       "seconds": 76.219,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 4096,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 195386,
+         "mean_order": 24.22,
+         "mean_gain": 1.0,
+         "written_fraction": 0.9831
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 185091,
+         "mean_order": 25.19,
+         "mean_gain": 1.0,
+         "written_fraction": 0.9804
+        }
+       ]
+      },
+      {
+       "tolerance": 16,
+       "search": "full",
+       "bytes": 181763,
+       "percent_of_pcm": 20.61,
+       "kbps": 290.8,
+       "stereo": "Independent",
+       "max_error": 16,
+       "snr_db": 51.35,
+       "trials": 42,
+       "seconds": 68.351,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 4096,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 95125,
+         "mean_order": 10.52,
+         "mean_gain": 1.0,
+         "written_fraction": 0.8254
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 4096,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 86610,
+         "mean_order": 8.22,
+         "mean_gain": 1.0,
+         "written_fraction": 0.7919
+        }
+       ]
+      },
+      {
+       "tolerance": 128,
+       "search": "full",
+       "bytes": 94016,
+       "percent_of_pcm": 10.66,
+       "kbps": 150.4,
+       "stereo": "Independent",
+       "max_error": 128,
+       "snr_db": 33.5,
+       "trials": 42,
+       "seconds": 65.588,
+       "channels": [
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 4096,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 49292,
+         "mean_order": 7.48,
+         "mean_gain": 1.0,
+         "written_fraction": 0.5079
+        },
+        {
+         "gradients": null,
+         "anchors": null,
+         "block": 8192,
+         "gradient_bytes": 0,
+         "anchor_bytes": 0,
+         "correction_bytes": 44696,
+         "mean_order": 10.07,
+         "mean_gain": 1.0,
+         "written_fraction": 0.4625
+        }
+       ]
+      },
+      {
+       "tolerance": "parametric",
+       "precision": 16,
+       "anchor_tolerance": 256,
+       "bytes": 263143,
+       "percent_of_pcm": 29.83,
+       "kbps": 421.0,
+       "snr_db": 32.28,
+       "groups": 1446,
+       "members": 18070,
+       "anchors": 74785,
+       "seconds": 0.901
+      }
+     ]
+    }
+   }
+  }
+ }
+}

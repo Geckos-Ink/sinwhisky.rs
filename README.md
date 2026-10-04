@@ -34,20 +34,25 @@ applies the transform to band division, exact filtering of circle curves and a
 proposed layered coding scheme. Its identities are checked by
 `python3 tools/eq_compression_checks.py`. A first implementation (experimental)
 divides a track into bands that add back exactly, equalizes, isolates a band, and
-codes it in layers within an error tolerance. Try it on a real file (FFmpeg and
-Cargo required; the output directory must be new and outside the repository):
+codes audio in SWL2 streams ([byte layout](docs/SWL2.md)): LPC correction within
+an error tolerance (0 = lossless), optional frequency-gradient groups and
+SinWhisky anchors, every choice made automatically by coded size. Try it on a real
+file (FFmpeg and Cargo required; the output directory must be new and outside the
+repository):
 
 ```sh
 ./test_music.sh quick /path/to/music.mp3 /tmp/eq-quick
 ./test_music.sh eq /path/to/music.mp3 /tmp/eq-bass --edges 250,2000 --gains-db 6,0,-12
 ./test_music.sh extrude /path/to/music.mp3 /tmp/eq-bass-only --band 40,250
-./test_music.sh compress /path/to/music.mp3 /tmp/eq-6k --upper 6000 --tolerance 0,16
+./test_music.sh compress /path/to/music.mp3 /tmp/eq-full --search full --upper 6000 --tolerance 0,16,128
 ```
 
 `quick` decodes 5 s from 60 s and writes the bands, tonal and residual tracks, an
-equalized mix, an isolated band and its remainder, decoded streams, `source.wav`,
-a FLAC control and `report.json`. On one excerpt the coder is not yet better than
-FLAC (paper Section 6.1).
+equalized mix, an isolated band and its remainder, SWL2 streams with their decoded
+audio, a parametric (gradients only) version, `source.wav`, a FLAC control and
+`report.json`. On three excerpts of one recording, lossless SWL2 is 7.7-11.0%
+smaller than FLAC (paper Section 6.2); the gradient layer paid only on a quiet
+passage with a tolerance.
 
 ## Build and try
 

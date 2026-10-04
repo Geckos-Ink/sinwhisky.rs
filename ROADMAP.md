@@ -104,30 +104,41 @@
 [PAPER_EQ_COMPRESSION.md](docs/PAPER_EQ_COMPRESSION.md) derives these methods;
 its identities are checked by `tools/eq_compression_checks.py`.
 
-Implemented (experimental, paper Section 6.1): `Faft::fit_banded` (two-way banded
-solve, selected inversion) and `fit_refined`; exact analog filtering of circle
-curves (`analog`: spiral pieces, Butterworth, zero phase); the component divider,
-equalizer and extrusion (`bands`); the SWL1 layered coder (`layered`); real-file
-runs via `test_music.sh quick|divide|eq|extrude|compress`. First measurement
-(`docs/experiments/eq-compression-beethoven-20261005.json`, one 5 s excerpt): the
-tonal layer removes 11-14 dB of residual energy, but the correction layer's
-polynomial predictor already handles the low band; tracks up to 6 kHz save 2.4%
-losslessly, tracks up to 2 kHz cost 3%, and with a tolerance tracks cost bytes.
-Both are far above FLAC (37.25%).
+Implemented (experimental, paper Sections 6.1-6.2): `Faft::fit_banded` (two-way
+banded solve, selected inversion) and `fit_refined`; exact analog filtering of
+circle curves (`analog`); the component divider, equalizer and extrusion
+(`bands`); the SWL2 layered coder (`layered`, byte layout in `docs/SWL2.md`): LPC
+correction up to order 32 with the layers as per-block-gain side information,
+frequency-gradient groups with header-declared field widths, SinWhisky anchors at
+dynamic positions, a parametric mode, and `encode_auto` choosing stereo mode,
+layers, bands, precisions and block size by exact coded size. Real-file runs via
+`test_music.sh quick|divide|eq|extrude|compress [--search full]`.
 
-1. Stronger correction predictor (adaptive LPC, as FLAC) for both the control and
-   the layered stream; only then judge the tonal layer.
-2. Tonal layer where linear prediction fails: wider/mid bands, breakpoint
-   thinning, Hermite gradients (paper 4.2-4.3), coarser precision against tolerance.
-3. Band layer at each band's own rate (paper 4.5), and per-band windows (paper 2.5).
-4. Divider selectivity on synthetic tones against spectral masking and a
-   Linkwitz-Riley crossover; residual curve as circles instead of lines.
-5. Banded fit against the clustered pursuit (agreement, cost vs chain length);
-   a banded joint Gauss-Newton to replace the coordinate refinement.
-6. Faster analysis: the fast path costs ~30 ms per 2048 window on real music;
-   the tracker 100-330 ms (it rescans almost every window).
-7. Rotations per second of determined curves against band edge.
-8. More excerpts and recordings before any compression claim; no listening claim.
+Measured on three 5 s excerpts (`docs/experiments/swl2-beethoven-20261005.json`):
+lossless SWL2 is 7.7-11.0% smaller than FLAC; against SWL1 on the 60 s excerpt,
+24.6% (lossless) to 19% (tolerance 128) smaller. Gradient and anchor layers do
+not pay on loud passages (LPC already removes the tonal energy) but gradients
+saved 16.9% at tolerance 128 and 1.8% at 16 on the quiet 180 s excerpt.
+Parametric streams need more bytes than the correction layer at comparable SNR.
+
+1. Stronger correction coding: cascaded adaptive filters (NLMS stages, as
+   OptimFROG/Monkey's Audio), inter-channel prediction for stereo, bias
+   cancellation, context mixing for the indices.
+2. Lossy prediction: noise feedback/shaping and predictors fitted on the
+   reconstructed (noisy) history; the gradients pay where this history is noisy.
+3. Gradient groups: breakpoint thinning, Hermite gradients (paper 4.2-4.3),
+   harmonic groups (shared fundamental), cheaper per-member classes.
+4. SinWhisky anchors: optimize anchor values ("best circles") instead of taking
+   samples; only parametric/lossy use is plausible after Table 3.
+5. A perceptual error criterion and blind listening, the only setting in which
+   parametric streams could pay; not measurable from bytes and SNR alone.
+6. Speed: `encode_auto --search full` takes ~50 s per 5 s stereo stream and
+   tolerance (tone analysis and anchor placement dominate); reuse one analysis
+   across tolerances.
+7. Divider selectivity on synthetic tones against spectral masking and a
+   Linkwitz-Riley crossover; banded fit against the clustered pursuit; a banded
+   joint Gauss-Newton; rotations per second of determined curves against band edge.
+8. More recordings and genres before any general compression claim.
 
 ## Earlier geometry-first focus (controls)
 

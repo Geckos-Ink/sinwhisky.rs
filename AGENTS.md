@@ -110,10 +110,14 @@ code. Optional NumPy/FFmpeg research tools must not become library dependencies.
   exactly (last residual band is the remainder); tones are assigned whole by
   crossover weights that sum to one. [analog](src/analog.rs) filtering is exact on
   spiral pieces (zero state before the curve; zero-phase drops the forward tail
-  past its end). [layered](src/layered.rs) decode needs no source and reproduces
-  the encoder's samples; every sample is within `tolerance` (0 = lossless).
-  Sub-half-bin tones are DC (ill-conditioned sine atom otherwise). Protected by
-  `tests/bands.rs` and `tests/layered.rs`.
+  past its end). [layered](src/layered/mod.rs) (SWL2, [spec](docs/SWL2.md))
+  decode needs no source and reproduces the encoder's samples; every sample is
+  within `tolerance` (0 = lossless) unless the stream is `PARAMETRIC` (no
+  correction chunk, error measured as SNR). The correction chunk is integer
+  arithmetic; gradient/anchor renders are binary64 (same-platform exactness only).
+  `encode_auto` keeps a layer only if the exact coded size shrinks. Stereo
+  decorrelation only when lossless. Sub-half-bin tones are DC (ill-conditioned
+  sine atom otherwise). Protected by `tests/bands.rs` and `tests/layered.rs`.
 - **Frame coverage/error:** [ResearchFrame::from_analysis](src/codec.rs) partitions
   source samples into nonempty half-open ranges. Every predicted source sample
   is checked against tolerance. Decode has no dependency on original PCM.
@@ -138,10 +142,11 @@ windows, `PeakTracker::update` (scan-free polish, rescans on interval/novelty).
 EQ/compression consumer: samples → `ToneAnalysis` (circle curve, Hann windows
 T/hop T/2, |FAFT| maxima below `upper`, `fit_banded` + significance prune +
 `fit_refined`) → `divide` (tones by crossover weight; residual line curve through
-zero-phase Butterworth, complementary) → `equalize`/`extrude`; or → `layered::encode`
-(tracks with gradient-predicted frequencies, MQ cubic rendering, closed-loop
-integer corrections) → SWL1 bytes → `decode`. `examples/eq_audio.rs` runs it on
-PCM16 for `test_music.sh quick|divide|eq|extrude|compress`.
+zero-phase Butterworth, complementary) → `equalize`/`extrude`; or →
+`layered::encode_auto` (stereo mode; per channel optional gradient groups,
+optional SinWhisky anchors, then the LPC correction chunk with the layers as
+side information; every choice by exact coded size) → SWL2 bytes → `decode`.
+`examples/eq_audio.rs` runs it on PCM16 for `test_music.sh quick|divide|eq|extrude|compress`.
 
 Ports consumer (outside the crate): `examples/port_vectors` → `ports/fixtures/vectors.json`
 → `ports/wasm-simd` (f64 resampler, AFT, FAFT; scalar and SIMD) → `ports/webgpu` (f32
@@ -382,23 +387,32 @@ to one), `divide`, `equalize`, `extrude`. The divider is as good as the fit; ton
 above `upper` stay in the residual. Uses the fast path, not `pursue`: the tracker
 cost 100-330 ms per window on real music in development runs.
 
-### [src/layered.rs](src/layered.rs)
+### [src/layered/](src/layered/mod.rs) and [docs/SWL2.md](docs/SWL2.md)
 
-Experimental SWL1 stream: 34-byte header, tonal range-coded payload (tracks,
-births/continuations, gradient-predicted frequency, integrated phase, amplitude-
-dependent power-of-two steps), correction payload (per 4096-sample block order
-0/1/2 closed-loop polynomial, step 2*tolerance+1, adaptive zero/sign/gamma
-contexts). LZMA-style binary range coder. Bounded header/allocations and
-malformed-stream rejection are tested, not fuzzed. No band layer, breakpoint
-thinning or LPC yet. Same-platform determinism only.
+Experimental SWL2 stream, specified byte by byte in `docs/SWL2.md` (keep the two
+in sync; bump the version for any layout change). `mod.rs`: 16-byte header, per
+channel typed chunks, stereo transforms (FLAC's four, lossless only), `encode`
+(fixed `StreamConfig`), `encode_auto` (search with `Trial` log), `decode`,
+`PARAMETRIC`. `coder.rs`: LZMA-style range coder, adaptive gamma, MSB-first bit
+packer. `correction.rs`: per block gain for the layer prediction (quarters) and
+LPC order (0..32, Levinson-Durbin on Tukey autocorrelation, quantization noise on
+the zero lag when lossy, 15-bit integer coefficients), chosen by trial coding;
+running-magnitude contexts. `gradients.rs`: track linking, quadratic-phase
+segments (frequency gradient), groups sharing start/duration/volume function,
+header-declared field widths, amplitude-class quanta, cross-faded joints.
+`anchors.rs`: greedy dynamic-gap anchors, circles through anchor triplets with
+quadratic angle in time, raised-cosine cross-fade; optional zero-phase low-band
+target. Bounded parsing and malformed-stream rejection are tested, not fuzzed.
 
 ### [examples/eq_audio.rs](examples/eq_audio.rs)
 
 Reads interleaved s16le PCM, runs `divide`/`eq`/`extrude`/`compress`/`all` per
-channel, writes PCM16 WAVs, SWL1 streams and `report.json` into a new directory
-outside the repository (checked), verifies every decode and error bound, and
-prints the aggregate report. Timings are wall-clock. Published aggregate:
-`docs/experiments/eq-compression-beethoven-20261005.json`.
+channel, writes PCM16 WAVs, SWL2 streams (`encode_auto`, `--search fast|full`,
+optional `--parametric P [--parametric-anchors T]`) and `report.json` into a new
+directory outside the repository (checked), verifies every decode and error
+bound, and prints the aggregate report. Timings are wall-clock. Published
+aggregates: `docs/experiments/eq-compression-beethoven-20261005.json` (SWL1) and
+`docs/experiments/swl2-beethoven-20261005.json`.
 
 ### [examples/pursuit_bench.rs](examples/pursuit_bench.rs)
 
@@ -779,7 +793,7 @@ extent, and frame-coverage tests detect these errors.
 | `fit_banded`, `fit_refined` | [banded fit](src/faft/banded.rs) | Two-way banded joint fit; valid bound under truncation |
 | `AnalogFilter`, `SpiralCurve` | [analog](src/analog.rs) | Exact rational filtering of circle/spiral curves, zero-phase passes |
 | `ToneAnalysis`, `divide`, `equalize`, `extrude` | [bands](src/bands.rs) | Complete band division by fitted tones and complementary residual filters |
-| `layered::encode`/`decode` (SWL1) | [layered](src/layered.rs) | Experimental closed-loop coder; error <= tolerance; not a stable format |
+| `layered::encode`/`encode_auto`/`decode` (SWL2) | [layered](src/layered/mod.rs), [spec](docs/SWL2.md) | Experimental closed-loop coder; error <= tolerance (or parametric); automatic choices by exact size; not a stable format |
 | `test_music.sh quick\|divide\|eq\|extrude\|compress` | [wrapper](test_music.sh), [eq_audio](examples/eq_audio.rs) | Real-file listening outputs and byte counts against FLAC |
 | `ResearchFrame`, `SegmentModel` | [src/codec.rs](src/codec.rs) | Experimental in-memory prediction only |
 | Periodic angular AFT | [src/aft.rs](src/aft.rs) | Continuous angular interpolant, explicit joins and closing interval |
@@ -880,7 +894,7 @@ the real-file run (FFmpeg/ffprobe and Cargo; output outside the repository):
 ```sh
 python3 tools/eq_compression_checks.py
 ./test_music.sh quick /path/to/music.mp3 /tmp/eq-quick
-./test_music.sh compress /path/to/music.mp3 /tmp/eq-6k --upper 6000 --tolerance 0,16,128
+./test_music.sh compress /path/to/music.mp3 /tmp/eq-full --search full --upper 6000 --tolerance 0,16,128
 ```
 
 Cross-validation needs NumPy/C compiler; `audio_compare.py` needs NumPy/FFmpeg.
@@ -922,7 +936,7 @@ inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz auto
 | Circle transforms / predictor DFT | `tests/spectral.rs` |
 | SWR1 byte decode/error/limits/Fourier/subarcs | Optional `tests/test_compression_lab.py` |
 | Banded fit = dense fit, exact filtering vs Runge-Kutta, zero-phase response, division completeness, tones whole, DC snap | `tests/bands.rs` |
-| SWL1 lossless/bounded round trips, decoder = encoder, tonal vs control bytes, malformed streams | `tests/layered.rs` |
+| SWL2 round trips with every layer and tolerance, stereo modes, LPC on tones vs noise, parametric mode, auto never worse than correction alone, malformed streams | `tests/layered.rs` |
 | EQ/compression paper: masked-edge leakage, two-way solve, filtered rotations, spirals, gradient tones | Optional `tools/eq_compression_checks.py` (standard library) |
 
 Known test gaps: SWR1 fuzzing/security and cross-platform rounding, other platforms,
@@ -965,11 +979,11 @@ This initial unpublished API may evolve; document every behavior change.
   continuous circle joins, peak-list completeness, off-grid/residual circle
   search, continuity, shared distortion allocation, geometry quantization, better residual
   coding, broader byte/error measurements and a separately validated FLT implementation.
-  The equalization/compression draft ([paper](docs/PAPER_EQ_COMPRESSION.md)) now
-  has a first implementation (banded fit, exact analog filters, divider/EQ/
-  extrusion, SWL1 layered coder). On one 5 s excerpt the tonal layer saved 2.4%
-  losslessly only with tones up to 6 kHz, cost bytes with a tolerance, and both
-  stay far above FLAC; see paper Section 6.1 and the roadmap.
+  The equalization/compression draft ([paper](docs/PAPER_EQ_COMPRESSION.md)) has
+  an implementation (banded fit, exact analog filters, divider/EQ/extrusion, SWL2
+  coder with LPC, gradient groups, SinWhisky anchors and automatic choices). On
+  three 5 s excerpts lossless SWL2 is 7.7-11.0% smaller than FLAC; gradient and
+  anchor layers paid only on a quiet passage with a tolerance (paper 6.2).
 
 ## Task start and handoff checklist
 
