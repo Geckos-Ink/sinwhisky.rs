@@ -1,0 +1,253 @@
+{
+ "description": "PAPER_EQ_COMPRESSION.md first implementation: divide/eq/extrude and SWL1 layered coding on one excerpt. Aggregate reports of examples/eq_audio.rs via test_music.sh; no audio. Timings are wall-clock on one arm64 laptop (Rust 1.98.1) and machine-specific.",
+ "source": "Beethoven recording (44.1 kHz stereo MP3, 320 kbps), decoded to PCM16, excerpt 60-65 s",
+ "commands": [
+  "./test_music.sh quick INPUT OUT",
+  "./test_music.sh compress INPUT OUT --upper 6000 --tolerance 0,16,128"
+ ],
+ "flac_bytes": 328541,
+ "quick": {
+  "command": "all",
+  "channels": 2,
+  "rate": 44100,
+  "frames": 220500,
+  "seconds": 5.0,
+  "window": 2048,
+  "upper_hz": 2000,
+  "max_error": 16,
+  "analysis": {
+   "seconds": 12.36,
+   "tones_per_frame": 25.66,
+   "rotations": 180522,
+   "explained": [
+    0.9054,
+    0.91476
+   ],
+   "curve_max_error": 15.984
+  },
+  "divide": {
+   "edges_hz": [
+    250.0,
+    2000.0
+   ],
+   "seconds": 1.543,
+   "max_sum_error": 3.638e-12,
+   "bands": [
+    {
+     "rms": 1066.15,
+     "tonal_rms": 1029.99,
+     "clipped": 0
+    },
+    {
+     "rms": 2249.28,
+     "tonal_rms": 2152.51,
+     "clipped": 0
+    },
+    {
+     "rms": 365.55,
+     "tonal_rms": 0.17,
+     "clipped": 0
+    }
+   ]
+  },
+  "eq": {
+   "gains_db": [
+    6.0,
+    0.0,
+    -12.0
+   ],
+   "clipped": 0
+  },
+  "extrude": {
+   "band_hz": [
+    40,
+    250
+   ],
+   "seconds": 1.604,
+   "isolated_rms": 1064.26,
+   "remainder_rms": 2296.2
+  },
+  "compress": {
+   "pcm_bytes": 882000,
+   "precision": 4,
+   "runs": [
+    {
+     "tolerance": 0,
+     "tonal_layer": true,
+     "bytes": 414021,
+     "percent_of_pcm": 46.94,
+     "kbps": 662.4,
+     "tonal_bytes": 27880,
+     "correction_bytes": 386073,
+     "tracks": 3258,
+     "breakpoints": 11077,
+     "written_fraction": 0.9768,
+     "residual_rms": 683.23,
+     "max_error": 0,
+     "seconds": 0.195
+    },
+    {
+     "tolerance": 0,
+     "tonal_layer": false,
+     "bytes": 401975,
+     "percent_of_pcm": 45.58,
+     "kbps": 643.2,
+     "tonal_bytes": 0,
+     "correction_bytes": 401907,
+     "tracks": 0,
+     "breakpoints": 0,
+     "written_fraction": 0.9823,
+     "residual_rms": 2536.07,
+     "max_error": 0,
+     "seconds": 0.049
+    },
+    {
+     "tolerance": 16,
+     "tonal_layer": true,
+     "bytes": 172419,
+     "percent_of_pcm": 19.55,
+     "kbps": 275.9,
+     "tonal_bytes": 27880,
+     "correction_bytes": 144471,
+     "tracks": 3258,
+     "breakpoints": 11077,
+     "written_fraction": 0.6571,
+     "residual_rms": 683.23,
+     "max_error": 16,
+     "seconds": 0.175
+    },
+    {
+     "tolerance": 16,
+     "tonal_layer": false,
+     "bytes": 154540,
+     "percent_of_pcm": 17.52,
+     "kbps": 247.3,
+     "tonal_bytes": 0,
+     "correction_bytes": 154472,
+     "tracks": 0,
+     "breakpoints": 0,
+     "written_fraction": 0.705,
+     "residual_rms": 2536.07,
+     "max_error": 16,
+     "seconds": 0.029
+    }
+   ]
+  }
+ },
+ "compress_upper_6000": {
+  "command": "compress",
+  "channels": 2,
+  "rate": 44100,
+  "frames": 220500,
+  "seconds": 5.0,
+  "window": 2048,
+  "upper_hz": 6000,
+  "max_error": 16,
+  "analysis": {
+   "seconds": 19.549,
+   "tones_per_frame": 45.85,
+   "rotations": 180522,
+   "explained": [
+    0.93548,
+    0.93842
+   ],
+   "curve_max_error": 15.984
+  },
+  "compress": {
+   "pcm_bytes": 882000,
+   "precision": 4,
+   "runs": [
+    {
+     "tolerance": 0,
+     "tonal_layer": true,
+     "bytes": 392219,
+     "percent_of_pcm": 44.47,
+     "kbps": 627.6,
+     "tonal_bytes": 45367,
+     "correction_bytes": 346784,
+     "tracks": 6908,
+     "breakpoints": 19279,
+     "written_fraction": 0.9632,
+     "residual_rms": 535.91,
+     "max_error": 0,
+     "seconds": 0.314
+    },
+    {
+     "tolerance": 0,
+     "tonal_layer": false,
+     "bytes": 401975,
+     "percent_of_pcm": 45.58,
+     "kbps": 643.2,
+     "tonal_bytes": 0,
+     "correction_bytes": 401907,
+     "tracks": 0,
+     "breakpoints": 0,
+     "written_fraction": 0.9823,
+     "residual_rms": 2536.07,
+     "max_error": 0,
+     "seconds": 0.049
+    },
+    {
+     "tolerance": 16,
+     "tonal_layer": true,
+     "bytes": 164377,
+     "percent_of_pcm": 18.64,
+     "kbps": 263.0,
+     "tonal_bytes": 45367,
+     "correction_bytes": 118942,
+     "tracks": 6908,
+     "breakpoints": 19279,
+     "written_fraction": 0.5538,
+     "residual_rms": 535.91,
+     "max_error": 16,
+     "seconds": 0.295
+    },
+    {
+     "tolerance": 16,
+     "tonal_layer": false,
+     "bytes": 154540,
+     "percent_of_pcm": 17.52,
+     "kbps": 247.3,
+     "tonal_bytes": 0,
+     "correction_bytes": 154472,
+     "tracks": 0,
+     "breakpoints": 0,
+     "written_fraction": 0.705,
+     "residual_rms": 2536.07,
+     "max_error": 16,
+     "seconds": 0.029
+    },
+    {
+     "tolerance": 128,
+     "tonal_layer": true,
+     "bytes": 87734,
+     "percent_of_pcm": 9.95,
+     "kbps": 140.4,
+     "tonal_bytes": 45367,
+     "correction_bytes": 42299,
+     "tracks": 6908,
+     "breakpoints": 19279,
+     "written_fraction": 0.1852,
+     "residual_rms": 535.91,
+     "max_error": 128,
+     "seconds": 0.289
+    },
+    {
+     "tolerance": 128,
+     "tonal_layer": false,
+     "bytes": 77613,
+     "percent_of_pcm": 8.8,
+     "kbps": 124.2,
+     "tonal_bytes": 0,
+     "correction_bytes": 77545,
+     "tracks": 0,
+     "breakpoints": 0,
+     "written_fraction": 0.3876,
+     "residual_rms": 2536.07,
+     "max_error": 128,
+     "seconds": 0.023
+    }
+   ]
+  }
+ }
+}

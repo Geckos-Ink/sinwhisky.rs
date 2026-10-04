@@ -349,7 +349,7 @@ impl Faft {
     /// Normalized centred window kernel `K(nu)/W` and its first two derivatives:
     /// the exact transform of the weight, i.e. the shape every tone takes on the
     /// continuous axis. Hann is `1/2 K(nu) + 1/4 K(nu-D) + 1/4 K(nu+D)`, D = 2*pi/T.
-    fn kernel_derivatives(&self, nu: f64) -> [f64; 3] {
+    pub(super) fn kernel_derivatives(&self, nu: f64) -> [f64; 3] {
         let duration = self.window.len() as f64;
         let inverse = 1.0 / self.weight_sum;
         match self.weighting {
@@ -465,7 +465,7 @@ impl Faft {
     }
 
     /// Centred normalized transform value (window-centre phase origin).
-    fn centred_value(&self, omega: f64, table: &mut Vec<Complex>) -> Complex {
+    pub(super) fn centred_value(&self, omega: f64, table: &mut Vec<Complex>) -> Complex {
         let half = 0.5 * self.window.len() as f64;
         scale(
             mul(self.weighted(omega, table), phase(omega * half)),
@@ -473,7 +473,7 @@ impl Faft {
         )
     }
 
-    fn to_start(&self, omega: f64, centred: Complex) -> Complex {
+    pub(super) fn to_start(&self, omega: f64, centred: Complex) -> Complex {
         mul(centred, phase(-omega * 0.5 * self.window.len() as f64))
     }
 

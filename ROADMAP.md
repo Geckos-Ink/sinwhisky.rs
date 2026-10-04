@@ -99,6 +99,36 @@
 7. Keep the sampled geometry/adaptive spectra, integral AFT and FFT phasor control
    as references. Their targets differ; zooming a predictor adds no observations.
 
+## Next: equalization and compression (draft paper)
+
+[PAPER_EQ_COMPRESSION.md](docs/PAPER_EQ_COMPRESSION.md) derives these methods;
+its identities are checked by `tools/eq_compression_checks.py`.
+
+Implemented (experimental, paper Section 6.1): `Faft::fit_banded` (two-way banded
+solve, selected inversion) and `fit_refined`; exact analog filtering of circle
+curves (`analog`: spiral pieces, Butterworth, zero phase); the component divider,
+equalizer and extrusion (`bands`); the SWL1 layered coder (`layered`); real-file
+runs via `test_music.sh quick|divide|eq|extrude|compress`. First measurement
+(`docs/experiments/eq-compression-beethoven-20261005.json`, one 5 s excerpt): the
+tonal layer removes 11-14 dB of residual energy, but the correction layer's
+polynomial predictor already handles the low band; tracks up to 6 kHz save 2.4%
+losslessly, tracks up to 2 kHz cost 3%, and with a tolerance tracks cost bytes.
+Both are far above FLAC (37.25%).
+
+1. Stronger correction predictor (adaptive LPC, as FLAC) for both the control and
+   the layered stream; only then judge the tonal layer.
+2. Tonal layer where linear prediction fails: wider/mid bands, breakpoint
+   thinning, Hermite gradients (paper 4.2-4.3), coarser precision against tolerance.
+3. Band layer at each band's own rate (paper 4.5), and per-band windows (paper 2.5).
+4. Divider selectivity on synthetic tones against spectral masking and a
+   Linkwitz-Riley crossover; residual curve as circles instead of lines.
+5. Banded fit against the clustered pursuit (agreement, cost vs chain length);
+   a banded joint Gauss-Newton to replace the coordinate refinement.
+6. Faster analysis: the fast path costs ~30 ms per 2048 window on real music;
+   the tracker 100-330 ms (it rescans almost every window).
+7. Rotations per second of determined curves against band edge.
+8. More excerpts and recordings before any compression claim; no listening claim.
+
 ## Earlier geometry-first focus (controls)
 
 1. Prune point/phase candidates using justified prediction bounds; fitting is now

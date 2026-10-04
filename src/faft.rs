@@ -50,6 +50,7 @@ use crate::{buffer, Error};
 use std::f64::consts::{PI, TAU};
 use std::ops::Range;
 
+mod banded;
 mod pursuit;
 pub use pursuit::{
     Component, FramePath, PeakRange, PeakTracker, Pursuit, PursuitParams, PursuitStats,

@@ -29,6 +29,25 @@ The [FAFT manuscript](docs/PAPER_FAFT.md) derives the transform from circle
 geometry. It covers rates as inscribed angles, the line as the infinite-radius
 limit, the endpoint form, and time distance as phase. Its
 [web copy](docs/PAPER_FAFT-net.md) has the same text with absolute figure URLs.
+A draft [extension on equalization and compression](docs/PAPER_EQ_COMPRESSION.md)
+applies the transform to band division, exact filtering of circle curves and a
+proposed layered coding scheme. Its identities are checked by
+`python3 tools/eq_compression_checks.py`. A first implementation (experimental)
+divides a track into bands that add back exactly, equalizes, isolates a band, and
+codes it in layers within an error tolerance. Try it on a real file (FFmpeg and
+Cargo required; the output directory must be new and outside the repository):
+
+```sh
+./test_music.sh quick /path/to/music.mp3 /tmp/eq-quick
+./test_music.sh eq /path/to/music.mp3 /tmp/eq-bass --edges 250,2000 --gains-db 6,0,-12
+./test_music.sh extrude /path/to/music.mp3 /tmp/eq-bass-only --band 40,250
+./test_music.sh compress /path/to/music.mp3 /tmp/eq-6k --upper 6000 --tolerance 0,16
+```
+
+`quick` decodes 5 s from 60 s and writes the bands, tonal and residual tracks, an
+equalized mix, an isolated band and its remainder, decoded streams, `source.wav`,
+a FLAC control and `report.json`. On one excerpt the coder is not yet better than
+FLAC (paper Section 6.1).
 
 ## Build and try
 

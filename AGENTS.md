@@ -106,6 +106,14 @@ code. Optional NumPy/FFmpeg research tools must not become library dependencies.
   (unique energy), never by distance; frequencies move by damped Gauss-Newton per
   coupled cluster with a stated step tolerance. The tracker's novelty test is a
   heuristic, backed by interval rescans. Protected by `tests/faft_pursuit.rs`.
+- **Bands/EQ/codec:** [divide](src/bands.rs) bands sum to the source samples
+  exactly (last residual band is the remainder); tones are assigned whole by
+  crossover weights that sum to one. [analog](src/analog.rs) filtering is exact on
+  spiral pieces (zero state before the curve; zero-phase drops the forward tail
+  past its end). [layered](src/layered.rs) decode needs no source and reproduces
+  the encoder's samples; every sample is within `tolerance` (0 = lossless).
+  Sub-half-bin tones are DC (ill-conditioned sine atom otherwise). Protected by
+  `tests/bands.rs` and `tests/layered.rs`.
 - **Frame coverage/error:** [ResearchFrame::from_analysis](src/codec.rs) partitions
   source samples into nonempty half-open ranges. Every predicted source sample
   is checked against tolerance. Decode has no dependency on original PCM.
@@ -126,6 +134,14 @@ at arbitrary frequencies, analytic derivatives, and relevant peaks. Zoom only
 samples the same curve for synthesis and comparison. Selection: `Faft` →
 `pursue` (one scan, residual seeds, joint fit, certificate) or, for consecutive
 windows, `PeakTracker::update` (scan-free polish, rescans on interval/novelty).
+
+EQ/compression consumer: samples → `ToneAnalysis` (circle curve, Hann windows
+T/hop T/2, |FAFT| maxima below `upper`, `fit_banded` + significance prune +
+`fit_refined`) → `divide` (tones by crossover weight; residual line curve through
+zero-phase Butterworth, complementary) → `equalize`/`extrude`; or → `layered::encode`
+(tracks with gradient-predicted frequencies, MQ cubic rendering, closed-loop
+integer corrections) → SWL1 bytes → `decode`. `examples/eq_audio.rs` runs it on
+PCM16 for `test_music.sh quick|divide|eq|extrude|compress`.
 
 Ports consumer (outside the crate): `examples/port_vectors` → `ports/fixtures/vectors.json`
 → `ports/wasm-simd` (f64 resampler, AFT, FAFT; scalar and SIMD) → `ports/webgpu` (f32
@@ -336,6 +352,54 @@ birth/survival hysteresis, hold). Fitted values are `(alpha - i*beta)/2` rotated
 to the window start; `observed` is FAFT there. Separation inside one main lobe
 is a tone-model property, not transform resolution. Not ported.
 
+### [src/faft/banded.rs](src/faft/banded.rs)
+
+Child of `faft` (uses `pursuit`'s `pub(super)` `kernel_derivatives`,
+`centred_value`, `to_start`). `fit_banded`: joint tone fit with Gram entries kept
+within `reach`, band Cholesky in ascending frequency (forward pass = explained
+energy), back substitution, Takahashi selected inversion for significance; a
+truncated band evaluates the residual from the full quadratic form, so `bound`
+stays valid. Atoms with normalized norm below 1e-9 are dropped. Infinite reach
+equals `fit`. `fit_refined`: banded fit plus coordinate Newton steps on each
+partial residual (quarter-resolution limit), refit each round. Pursuit arithmetic
+and port vectors are unchanged.
+
+### [src/analog.rs](src/analog.rs)
+
+`AnalogFilter` (partial fractions; stable, distinct, conjugate-closed poles;
+`butterworth_lowpass`, `response`) and `SpiralCurve` (pieces
+`Re[c0 + c1 u + sum a e^{rate u}]`): `from_circles` (stacked rotations merged,
+pieces cropped exactly), `from_samples` (line curve), `filter` (exact state chain,
+one term per pole and piece), `reverse`, `filter_zero_phase` (|H|^2), `samples`,
+`evaluate`. Resonant input terms are rejected. No spiral AFT yet.
+
+### [src/bands.rs](src/bands.rs)
+
+`ToneParams`/`ToneAnalysis` (pads T/2 zeros, hierarchical circle fit, per-window
+peaks + banded fit + prune + refine + DC snap; `synthesize(gain)` overlap-adds
+windowed tones), `BandSplit`/`Crossover` (brick wall or raised cosine; weights sum
+to one), `divide`, `equalize`, `extrude`. The divider is as good as the fit; tones
+above `upper` stay in the residual. Uses the fast path, not `pursue`: the tracker
+cost 100-330 ms per window on real music in development runs.
+
+### [src/layered.rs](src/layered.rs)
+
+Experimental SWL1 stream: 34-byte header, tonal range-coded payload (tracks,
+births/continuations, gradient-predicted frequency, integrated phase, amplitude-
+dependent power-of-two steps), correction payload (per 4096-sample block order
+0/1/2 closed-loop polynomial, step 2*tolerance+1, adaptive zero/sign/gamma
+contexts). LZMA-style binary range coder. Bounded header/allocations and
+malformed-stream rejection are tested, not fuzzed. No band layer, breakpoint
+thinning or LPC yet. Same-platform determinism only.
+
+### [examples/eq_audio.rs](examples/eq_audio.rs)
+
+Reads interleaved s16le PCM, runs `divide`/`eq`/`extrude`/`compress`/`all` per
+channel, writes PCM16 WAVs, SWL1 streams and `report.json` into a new directory
+outside the repository (checked), verifies every decode and error bound, and
+prints the aggregate report. Timings are wall-clock. Published aggregate:
+`docs/experiments/eq-compression-beethoven-20261005.json`.
+
 ### [examples/pursuit_bench.rs](examples/pursuit_bench.rs)
 
 Deterministic synthetic comparison (no audio, no clock in the data) of `peaks`,
@@ -472,6 +536,22 @@ after every edit, and upload new figures to that location. `PAPER_FAFT.pdf` is a
 browser print of the web copy and goes stale when the text changes.
 `PAPER_FAFT_old.md` is a superseded draft kept for history; do not update it.
 
+### [docs/PAPER_EQ_COMPRESSION.md](docs/PAPER_EQ_COMPRESSION.md) and [tools/eq_compression_checks.py](tools/eq_compression_checks.py)
+
+Draft extension of PAPER_FAFT.md, same author: band division (channel divider) by
+fitted components, the two-way (ascending, descending) banded solution of the
+joint fit, exact analog filtering of circle curves (spiral rotations), equalization
+and extrusion, and a proposed layered closed-loop coding scheme (gradient-tone
+tracks, band residuals at their own rate, integer corrections within a tolerance).
+Nothing in it is implemented in the crate and no compression is measured; its
+Section 6 lists the required experiments. It cites PAPER_FAFT.md with an F prefix
+(`(F44)`, Proposition F8): keep those references valid when that paper is renumbered.
+Same formatting rules as PAPER_FAFT.md. Table 1 and the figures quoted in its
+Sections 2.4 and 4.2 come from `python3 tools/eq_compression_checks.py` (standard
+library, deterministic, under a second), which asserts Propositions 3, 5, 6 and 8
+against independent computations; regenerate rather than edit those numbers.
+There is no web copy yet.
+
 ### [docs/COMPRESSION.md](docs/COMPRESSION.md)
 
 Opens by pointing to FAFT.md and labels its FAFT-named sections as controls.
@@ -547,6 +627,10 @@ synchronized. Do not interpret MP3 bitrate controls as a circle codec benchmark.
 ### [test_music.sh](test_music.sh)
 
 Executable Bash entry point for input/bitrate fraction/upscale/output arguments.
+Subcommands `quick|divide|eq|extrude|compress INPUT OUTPUT_DIR [--start S]
+[--seconds D] [eq_audio options]` decode an excerpt with FFmpeg/ffprobe, run
+`examples/eq_audio.rs`, and add `source.wav` (and `source.flac` as the lossless
+byte control for `quick`/`compress`); `quick` runs all on 5 s from 60 s.
 The named `input_music`, `downscale_bitrate`, `upscale`, and `output_music` settings
 also support environment-based invocation. It selects `PYTHON`, loads the sh Rust
 environment when Cargo is absent, and delegates to `tools/music_test.py` from any
@@ -692,6 +776,11 @@ extent, and frame-coverage tests detect these errors.
 | `CircleCurve`, `Faft`, `Rotation` | [FAFT](src/faft.rs) | Exact continuous transform of circle curves; peaks at real frequencies; no zoom/FFT |
 | `Pursuit`, `SpectralFit`, `PeakRange`, `PeakTracker` | [peak selection](src/faft/pursuit.rs) | Joint tone fit, residual certificate, measured ranges, tracking; not a completeness proof beyond the stated bound |
 | `PhasorFrame`, `transform` | [FFT phasor control](src/phasor_fft.rs) | Rotating-circle optimization and sampled FFT; RMS bound, no wire format |
+| `fit_banded`, `fit_refined` | [banded fit](src/faft/banded.rs) | Two-way banded joint fit; valid bound under truncation |
+| `AnalogFilter`, `SpiralCurve` | [analog](src/analog.rs) | Exact rational filtering of circle/spiral curves, zero-phase passes |
+| `ToneAnalysis`, `divide`, `equalize`, `extrude` | [bands](src/bands.rs) | Complete band division by fitted tones and complementary residual filters |
+| `layered::encode`/`decode` (SWL1) | [layered](src/layered.rs) | Experimental closed-loop coder; error <= tolerance; not a stable format |
+| `test_music.sh quick\|divide\|eq\|extrude\|compress` | [wrapper](test_music.sh), [eq_audio](examples/eq_audio.rs) | Real-file listening outputs and byte counts against FLAC |
 | `ResearchFrame`, `SegmentModel` | [src/codec.rs](src/codec.rs) | Experimental in-memory prediction only |
 | Periodic angular AFT | [src/aft.rs](src/aft.rs) | Continuous angular interpolant, explicit joins and closing interval |
 | Arc transforms and frame DFT | [src/spectral.rs](src/spectral.rs) | Continuous vs. sampled transforms; no FFT speed claim |
@@ -720,6 +809,8 @@ cargo test --offline --test geometric_faft
 cargo test --offline --test adaptive_faft
 cargo test --offline --test spectral
 cargo test --offline --test aft
+cargo test --offline --test bands
+cargo test --offline --test layered
 cargo fmt --check
 cargo clippy --offline --all-targets -- -D warnings
 cargo doc --offline --no-deps
@@ -783,6 +874,15 @@ python3 tools/adaptive_compare.py /path/to/music.mp3 /tmp/adaptive-trial \
   --ffmpeg /path/to/ffmpeg
 ```
 
+Equalization/compression paper checks (standard library only, no audio), and
+the real-file run (FFmpeg/ffprobe and Cargo; output outside the repository):
+
+```sh
+python3 tools/eq_compression_checks.py
+./test_music.sh quick /path/to/music.mp3 /tmp/eq-quick
+./test_music.sh compress /path/to/music.mp3 /tmp/eq-6k --upper 6000 --tolerance 0,16,128
+```
+
 Cross-validation needs NumPy/C compiler; `audio_compare.py` needs NumPy/FFmpeg.
 The compression lab needs NumPy/FFmpeg and the Rust exporter; its synthetic
 tests need NumPy (bridge test additionally needs the built exporter).
@@ -821,6 +921,9 @@ inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz auto
 | Periodic AFT / benchmark conventions | `tests/aft.rs`, optional `tests/test_aft_compare.py` |
 | Circle transforms / predictor DFT | `tests/spectral.rs` |
 | SWR1 byte decode/error/limits/Fourier/subarcs | Optional `tests/test_compression_lab.py` |
+| Banded fit = dense fit, exact filtering vs Runge-Kutta, zero-phase response, division completeness, tones whole, DC snap | `tests/bands.rs` |
+| SWL1 lossless/bounded round trips, decoder = encoder, tonal vs control bytes, malformed streams | `tests/layered.rs` |
+| EQ/compression paper: masked-edge leakage, two-way solve, filtered rotations, spirals, gradient tones | Optional `tools/eq_compression_checks.py` (standard library) |
 
 Known test gaps: SWR1 fuzzing/security and cross-platform rounding, other platforms,
 performance budgets, broad audio corpus, blind listening, or realtime behavior.
@@ -862,6 +965,11 @@ This initial unpublished API may evolve; document every behavior change.
   continuous circle joins, peak-list completeness, off-grid/residual circle
   search, continuity, shared distortion allocation, geometry quantization, better residual
   coding, broader byte/error measurements and a separately validated FLT implementation.
+  The equalization/compression draft ([paper](docs/PAPER_EQ_COMPRESSION.md)) now
+  has a first implementation (banded fit, exact analog filters, divider/EQ/
+  extrusion, SWL1 layered coder). On one 5 s excerpt the tonal layer saved 2.4%
+  losslessly only with tones up to 6 kHz, cost bytes with a tolerance, and both
+  stay far above FLAC; see paper Section 6.1 and the roadmap.
 
 ## Task start and handoff checklist
 

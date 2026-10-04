@@ -12,11 +12,14 @@
 
 pub mod adaptive_faft;
 pub mod aft;
+pub mod analog;
 pub mod analysis;
+pub mod bands;
 pub mod codec;
 pub mod faft;
 pub mod geometric_faft;
 pub mod geometry;
+pub mod layered;
 pub mod phasor_fft;
 pub mod resample;
 pub mod spectral;
