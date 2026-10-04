@@ -2,13 +2,13 @@
 
 **Riccardo Cecchini** — riccardo.cecchini594@edu.unito.it
 
-*30 September 2026* - v1.1 04/10/2026
+*30 September 2026* - v1.2 04/10/2026
 
 ---
 
 ## Abstract
 
-A sampled signal can be extended to a continuous geometric model by fitting a circle through local groups of samples and traversing each accepted arc at constant angular speed. Each arc is then the vertical projection of a rotating radius vector, that is, a finite sinusoidal segment with its own centre, radius, phase and angular rate. This paper studies the spectrum of that explicitly constructed continuous curve, rather than the spectrum of the source samples alone. Starting from the circle through three points, every parameter of a rotation is derived from elementary geometry: the angular sweeps of the two sides of a circle are twice the inscribed angles of the triangle formed by the three points, and a straight line is the limit of infinite radius. We define the **Angular Fourier Transform (AFT)** as the exact Fourier integral of the piecewise-rotational model. Integrating the rotating radius vector gives a closed form for each arc, which depends only on the centre height, the angular rate and the arc's endpoint values and slopes; the time distance between arcs enters only as a phase, by the shift theorem. The transform is therefore available at every real angular frequency $\omega$, and the query frequency is not tied to the number of source samples. We then present the **Fast Angular Fourier Transform (FAFT)**, which evaluates the closed form by chaining these phases with complex multiplications (*rotate and add*). FAFT is a single-frequency recurrence, closer to Goertzel's algorithm than to the Cooley–Tukey FFT: it shares no work between frequencies, and because the fitted curve is a nonlinear function of the samples, no factorization of the discrete Fourier transform applies. It needs no numerical quadrature, no dense resampling and no transcendental function per rotation. We prove that densely sampling the fitted curve ("zoom") only approaches the AFT and differs from it by spectral images and join terms, whose decay follows from the endpoint form. We also derive analytic frequency derivatives for locating spectral peaks directly on the continuous frequency axis. On 1,024-sample windows of a real recording, one Hann-weighted AFT query costs 2.4–10.6 µs, agrees with independent quadrature to approximately $10^{-14}$ relative error, and yields a converged list of relevant peaks in 1.4–10.9 ms. The method is not claimed to replace the FFT for a complete fixed-bin spectrum. The angular rates of individual arcs are not physical signal frequencies: they depend on the horizontal scale used for fitting, and the frequencies of the signal emerge only from the interference of all arcs.
+A sampled signal can be extended to a continuous geometric model by fitting a circle through local groups of samples and traversing each accepted arc at constant angular speed. Each arc is then the vertical projection of a rotating radius vector, that is, a finite sinusoidal segment with its own centre, radius, phase and angular rate. This paper studies the spectrum of that explicitly constructed continuous curve, rather than the spectrum of the source samples alone. Starting from the circle through three points, every parameter of a rotation is derived from elementary geometry: the angular sweeps of the two sides of a circle are twice the inscribed angles of the triangle formed by the three points, and a straight line is the limit of infinite radius. We define the **Angular Fourier Transform (AFT)** as the exact Fourier integral of the piecewise-rotational model. Integrating the rotating radius vector gives a closed form for each arc, which depends only on the centre height, the angular rate and the arc's endpoint values and slopes; the time distance between arcs enters only as a phase, by the shift theorem. The transform is therefore available at every real angular frequency $\omega$, and the query frequency is not tied to the number of source samples. We then present the **Fast Angular Fourier Transform (FAFT)**, which evaluates the closed form by chaining these phases with complex multiplications (*rotate and add*). FAFT is a single-frequency recurrence, closer to Goertzel's algorithm than to the Cooley–Tukey FFT: it shares no work between frequencies, and because the fitted curve is a nonlinear function of the samples, no factorization of the discrete Fourier transform applies. It needs no numerical quadrature, no dense resampling and no transcendental function per rotation. We prove that densely sampling the fitted curve ("zoom") only approaches the AFT and differs from it by spectral images and join terms, whose decay follows from the endpoint form. We also derive analytic frequency derivatives for locating spectral peaks directly on the continuous frequency axis. On 1,024-sample windows of a real recording, one Hann-weighted AFT query costs 2.4–10.6 µs, agrees with independent quadrature to approximately $10^{-14}$ relative error, and yields a converged list of relevant peaks in 1.4–10.9 ms. A list of maxima is not yet a list of components: every peak's height is shared with its neighbours through the window kernel, so selecting maxima one by one is a zero-sum choice in which each missed or spurious peak biases the others. We therefore fit all selected tones jointly, with every inner product in closed form from the kernel and the AFT, refine their frequencies together by Gauss–Newton, and obtain each tone's own height, the residual energy, and a bound on the unexplained spectrum at every real frequency. Across consecutive windows the selection is carried forward without rescanning. On a synthetic test with known partials, this raised recall from 89% to 100%, removed spurious peaks, reduced the 95th-percentile height error from 4.7 to 0.6 dB, and, when tracking, cost a median 3.5 ms per window against 6.4 ms for the scan. The method is not claimed to replace the FFT for a complete fixed-bin spectrum. The angular rates of individual arcs are not physical signal frequencies: they depend on the horizontal scale used for fitting, and the frequencies of the signal emerge only from the interference of all arcs.
 
 ![SinWhisky](https://geckos.ink/stuff/sinwhisky/figures/sinusoids-circle.png)
 
@@ -28,7 +28,7 @@ The transform problem is then precise: **what is the Fourier transform of this c
 2. **Dense evaluation (zoom).** Sample the fitted curve at fractional source positions. This produces a denser discrete sequence, not a transform (Section 4).
 3. **Angular Fourier Transform.** Integrate the fitted continuous curve directly against $e^{-i\omega t}$ (Section 3) and evaluate that integral with FAFT (Section 5).
 
-The derivation proceeds from geometry to spectrum. Section 2 derives the circle, its angles and its angular rates from the three anchor points, shows that each half-arc is a rotating radius vector, obtains the line as the limit of infinite radius, and explains why the rates are not frequencies of the signal. Section 3 integrates one rotation in closed form, gives an equivalent form that depends only on the arc's endpoints, and assembles the transform of the whole curve with the shift theorem. Section 4 relates dense evaluation to the AFT. Section 5 presents the FAFT algorithm and Section 6 the search for relevant frequencies. Section 7 reports measurements and Section 8 discusses limitations.
+The derivation proceeds from geometry to spectrum. Section 2 derives the circle, its angles and its angular rates from the three anchor points, shows that each half-arc is a rotating radius vector, obtains the line as the limit of infinite radius, and explains why the rates are not frequencies of the signal. Section 3 integrates one rotation in closed form, gives an equivalent form that depends only on the arc's endpoints, and assembles the transform of the whole curve with the shift theorem. Section 4 relates dense evaluation to the AFT. Section 5 presents the FAFT algorithm. Section 6 treats relevant frequencies: the maxima of the transform, the window kernel that shares each peak's level with its neighbours, a joint closed-form tone fit with a certificate of what remains, and the selection of peaks across consecutive windows. Section 7 reports measurements and Section 8 discusses limitations.
 
 ### 1.1 What the AFT is not
 
@@ -520,7 +520,9 @@ Algorithm 3  AFT(prepared, ω)                        ▷ normalized coefficient
 
 ## 6. Relevant frequencies on a continuous axis
 
-The AFT is a smooth function of $\omega$. Its relevant frequencies are the local maxima of $\lvert\mathcal A\rvert$ above a floor. They form a variable-length list of real numbers, not $N/2+1$ bins.
+The AFT is a smooth function of $\omega$. Its relevant frequencies form a variable-length list of real numbers, not $N/2+1$ bins. Two questions must be kept apart. The first is where the local maxima of $\lvert\mathcal A\rvert$ lie: a property of the transform, answered exactly by Newton's method (Section 6.1). The second is which components explain the curve and how strong each one is: a question about a *model* of the curve, because the height of a maximum is shared with its neighbours through the window (Sections 6.2 and 6.3). Sections 6.4 to 6.6 answer the second question with a joint fit whose every term is a closed form, and Section 6.7 carries the selection from one window to the next.
+
+### 6.1 Maxima of the transform
 
 The resolution of the transform is set by the window *duration*, through $2\pi/T$, not by the number of samples. A zoomed curve has the same $T$ and therefore the same resolution. Seeds are taken on a grid of spacing $2\pi/(T\rho)$, where the density $\rho$, a positive integer with default 2, is the number of seed spacings per interval of width $2\pi/T$. Each seed is refined by Newton's method on the spectral power $G(\omega)=\lvert\mathcal A(\omega)\rvert^2$, using Proposition 5. With $\mathrm{Re}$ the real part,
 
@@ -547,7 +549,200 @@ Algorithm 4  PEAKS(prepared, [ω_lo, ω_hi], ρ, floor)
   return peaks (ω, A(ω))
 ```
 
-The grouping, merging and exclusion steps are explicit. Nearby candidates are merged, weak ones are excluded by relative and absolute floors, and flanks and unconverged seeds are discarded and counted. The scan is a seed heuristic, not a completeness proof. Finer query precision also does not separate two tones closer than about $2\pi/T$: an arbitrary query position is not added resolution.
+The grouping, merging and exclusion steps are explicit. Nearby candidates are merged, weak ones are excluded by relative and absolute floors, and flanks and unconverged seeds are discarded and counted. Every reported frequency is an exact maximum of $\lvert\mathcal A\rvert$. The scan is a seed heuristic, not a completeness proof, and finer query precision does not separate two maxima closer than about $2\pi/T$: an arbitrary query position is not added resolution. Algorithm 4 reports where the transform peaks; the following sections show why that is not yet a list of components.
+
+### 6.2 The window kernel and the range of a peak
+
+Let $t_c=t_0+T/2$ be the window centre. The *kernel* of a weighting is the transform of the weight itself, with phase origin at the centre:
+
+$$
+K(\nu)=\int_{t_0}^{t_0+T}w(t)e^{-i\nu(t-t_c)}dt. \tag{41}
+$$
+
+Both weightings are symmetric about $t_c$, so $K$ is real and even, $K(0)=W$, and its odd derivatives vanish at $0$. For the rectangular weight, and by Proposition 4 for Hann, with $\Delta=2\pi/T$,
+
+$$
+K_{\mathrm{rect}}(\nu)=\frac{2\sin(\nu T/2)}{\nu}=T\operatorname{sinc}\frac{\nu T}{2},\qquad K_{\mathrm{Hann}}(\nu)=\tfrac12K_{\mathrm{rect}}(\nu)+\tfrac14K_{\mathrm{rect}}(\nu-\Delta)+\tfrac14K_{\mathrm{rect}}(\nu+\Delta). \tag{42}
+$$
+
+**Proposition 7 (tone response).** Let a real tone of frequency $\omega_0$ be $x(t)=\alpha\cos\bigl(\omega_0(t-t_c)\bigr)+\beta\sin\bigl(\omega_0(t-t_c)\bigr)$ and $c=(\alpha-i\beta)/2$. Its centred transform is, at every real $\omega$,
+
+$$
+\mathcal A^c[x] (\omega)=c K(\omega-\omega_0)+\overline cK(\omega+\omega_0). \tag{43}
+$$
+
+*Proof.* Write $x=c e^{i\omega_0(t-t_c)}+\overline ce^{-i\omega_0(t-t_c)}$ and apply (41) to each exponential. $\square$
+
+A tone therefore occupies the shape of $K$ around $\omega_0$, plus an image at $-\omega_0$, and nothing else: there is no frequency grid and there are no spectral images at multiples of $2\pi$ (compare Proposition 6). The normalized height at the tone is $\lvert c\rvert\cdot K(0)/W=\lvert c\rvert$, half the amplitude. Table 1 lists the shape of $K$ in units of the resolution $2\pi/T$ ("bins"); these are the classical window figures [6], here exact functions of a continuous variable.
+
+| Kernel, in bins of $2\pi/T$ | Rectangular | Hann |
+|---|---:|---:|
+| Half-width at −3 dB / −6 dB / −20 dB | 0.442 / 0.603 / 0.908 | 0.719 / 0.998 / 1.650 |
+| First null (end of the main lobe) | 1 | 2 |
+| Highest sidelobe | −13.26 dB at 1.43 | −31.47 dB at 2.36 |
+| Sidelobe decay | 6 dB per octave | 18 dB per octave |
+| Height loss of a tone half a bin from the DFT grid | 3.92 dB | 1.42 dB |
+| Height loss on the continuous axis | 0 | 0 |
+
+*Table 1. Shape of the window kernel. The last two rows compare the "scalloping" of a fixed DFT grid with the AFT, whose maxima are located on the continuous axis.*
+
+The continuous axis removes grid scalloping. It does not remove *leakage*: by (43) and linearity, the transform of a sum of tones at a selected frequency $\omega_p$ is
+
+$$
+\mathcal A^c(\omega_p)=c_pK(0)+\overline{c_p}K(2\omega_p)+\sum_{q\ne p}\Bigl[c_qK(\omega_p-\omega_q)+\overline{c_q}K(\omega_p+\omega_q)\Bigr]+\mathcal A^c[\mathrm{rest}] (\omega_p), \tag{44}
+$$
+
+where "rest" is the non-tonal part of the curve, including the join terms of Corollary 3. The decibel level of a selected frequency therefore involves its neighbours: a neighbour at a separation of $s$ bins with relative level $L$ can change the height by up to $20\log_{10}\bigl(1\pm10^{L/20}\max_{s'\ge s}\lvert K(s')\rvert/K(0)\bigr)$ dB, depending on the relative phase. Table 2 evaluates this envelope.
+
+| Neighbour at $\ge s$ bins | Rect, equal level | Rect, −20 dB | Rect, −40 dB | Hann, equal level | Hann, −20 dB | Hann, −40 dB |
+|---|---:|---:|---:|---:|---:|---:|
+| $s=1$ | +1.71 / −2.13 | ±0.19 | ±0.019 | +3.52 / −6.02 | ±0.42 | ±0.043 |
+| $s=2$ | +1.05 / −1.19 | ±0.11 | ±0.011 | +0.23 / −0.24 | ±0.023 | ±0.002 |
+| $s=4$ | +0.60 / −0.64 | ±0.06 | ±0.006 | +0.03 / −0.03 | ±0.003 | ±0.0003 |
+| $s=8$ | +0.32 / −0.33 | ±0.03 | ±0.003 | < 0.01 | < 0.001 | < 0.0001 |
+
+*Table 2. Largest change, in dB, of a peak's height caused by one neighbouring tone at a separation of at least $s$ bins, by its level relative to the peak. The rectangular kernel trades a narrower main lobe for slowly decaying sidelobes; the Hann kernel confines leakage to about two bins.*
+
+**Peak range.** The *range* of a peak at $\omega_p$ at depth $D$ dB is the interval around $\omega_p$ where $\lvert\mathcal A\rvert\ge\lvert\mathcal A(\omega_p)\rvert10^{-D/20}$. It is measured on the transform itself: from $\omega_p$ outwards in steps of $2\pi/(16T)$, then by bisection to the crossing. A side that meets a valley above the level stops at the valley's minimum and is flagged as *shared*: the neighbouring maximum owns part of that range. For an isolated tone the range equals the kernel's half-width of Table 1 (tested to $10^{-3}$ of a bin). A range wider than the kernel, or a shared side, indicates unresolved neighbours, a modulated (non-stationary) component, or non-tonal content.
+
+The range depends on how the transform is obtained, in four ways. (i) The *weighting* sets $K$ (Table 1). (ii) A *sampled* evaluation of the same curve at zoom $z$ adds the images of Proposition 6 at multiples of $2\pi z$, and the DFT of the samples adds a periodic Dirichlet kernel and grid scalloping; the AFT has neither. (iii) The *moment and endpoint kernels* of Section 5.2 compute the same numbers (to $5\cdot10^{-15}$) and do not change ranges. (iv) The *curve* changes the non-tonal part of (44): by Corollary 3, kinks and value jumps at joins add a broadband floor decaying like $\omega^{-2}$ and $\omega^{-1}$, so a hierarchical fit with a coarser tolerance, or the triplet curve with a kink at every sample, lowers the dynamic range within which ranges and weak peaks are meaningful.
+
+### 6.3 Why peak picking is a zero-sum selection
+
+Equation (44) makes the difficulty of Section 6.1 precise. Reading a list of maxima as a list of components has three consequences.
+
+1. *Biased heights and positions.* Each reported height contains the leakage of every other component, up to the amounts of Table 2, and the maximum itself is shifted towards or away from its neighbours.
+2. *Spurious maxima.* Sidelobes are local maxima. With the rectangular weight a single tone has sidelobes at −13 dB, −18 dB, −21 dB and so on, all above a 1% floor (−40 dB); Algorithm 4 reports them as peaks.
+3. *Hidden components.* A weak tone on the flank or sidelobe of a strong one has no maximum of its own, or only a biased one.
+
+What is not selected is not discarded: its energy stays in the heights of the selected peaks and in spurious maxima. Every missed component makes the others less accurate, and a component split into two maxima takes height from itself. This is the same mechanism by which the energy of an off-bin tone is shared among fixed DFT bins, except that the selected frequencies are free. Choosing maxima more finely (a denser scan) cannot remove it, because it is a property of $K$ and $T$, not of the search. The selection must instead be made jointly: all selected components are estimated together, each height with its neighbours' leakage removed, and the energy that remains unexplained is measured.
+
+### 6.4 Joint tone fit in closed form
+
+Let the selected frequencies be $\omega_1,\ldots,\omega_P$, write $u=t-t_c$, and take the tone atoms $C_p=\cos\omega_pu$ and $S_p=\sin\omega_pu$. We fit $\sum_p\alpha_pC_p+\beta_pS_p$ to the curve by weighted least squares with the inner product $\langle f,g\rangle=W^{-1}\int f g w dt$. Let $k=K/W$ be the normalized kernel and $a=\mathcal A^c/W$ the normalized centred transform. Products of cosines and sines reduce to (41), and the cross terms vanish because $w$ is symmetric:
+
+$$
+\langle C_p,C_q\rangle=\frac{k(\omega_p-\omega_q)+k(\omega_p+\omega_q)}2,\qquad \langle S_p,S_q\rangle=\frac{k(\omega_p-\omega_q)-k(\omega_p+\omega_q)}2,\qquad \langle C_p,S_q\rangle=0. \tag{45}
+$$
+
+The data side consists of transform values at the selected frequencies:
+
+$$
+\langle y,C_p\rangle=\operatorname{Re}a(\omega_p),\qquad \langle y,S_p\rangle=-\operatorname{Im}a(\omega_p). \tag{46}
+$$
+
+The normal equations split into a cosine system $G_c\alpha=b_c$ and a sine system $G_s\beta=b_s$ of size $P$, with the matrices (45) and right sides (46), solved by Cholesky factorization. Each fitted component has the normalized value $c_p=(\alpha_p-i\beta_p)/2$, comparable with $\lvert\mathcal A(\omega_p)\rvert/W$; the ratio of the two, in dB, is the leakage of (44) at that peak.
+
+**Proposition 8 (residual energy and certificate).** Let $E=\int y^2w dt$ be the weighted energy of the curve, and let $R(\omega)=\mathcal A^c(\omega)-W\sum_p\bigl[c_pk(\omega-\omega_p)+\overline{c_p}k(\omega+\omega_p)\bigr]$ be the transform of the residual curve $r=y-\sum_p(\alpha_pC_p+\beta_pS_p)$. Then
+
+$$
+E_r=\int r^2w dt=E-W\bigl(\alpha^{\mathsf T}b_c+\beta^{\mathsf T}b_s\bigr), \tag{47}
+$$
+
+$E_r$ does not increase when a frequency is added to the list, and for every real $\omega$
+
+$$
+\frac{\lvert R(\omega)\rvert}W\le\sqrt{\frac{E_r}W}. \tag{48}
+$$
+
+*Proof.* (47) is the residual of a least-squares fit, by orthogonality of the residual to the atoms. Adding atoms enlarges the subspace, so the minimum cannot grow. For (48), $\lvert\int rwe^{-i\omega u}dt\rvert=\lvert\int(r\sqrt w)(\sqrt we^{-i\omega u})dt\rvert\le\sqrt{\int r^2w dt}\sqrt{\int w dt}$ by the Cauchy–Schwarz inequality, since $w\ge0$. $\square$
+
+Proposition 8 turns the zero-sum effect into an account. $E_r/E$ is the fraction of the curve left unexplained by the selection, and the right side of (48) is a *certificate*: wherever it is below the floor, no component above the floor is missing anywhere on the real axis, including above the source Nyquist frequency. The bound is conservative when the residual is broadband, because it allows all of $E_r$ to sit at one frequency. $E$ is the only quantity of this section computed by numerical integration: Gauss–Legendre rules with 16 nodes on panels of each support, with at most $\pi$ of phase per panel (twice the rate plus the Hann rate), which is exact to rounding. It is one scalar per window, not a transform value.
+
+The *significance* of component $p$ is its unique contribution: the increase of $E_r$ when $p$ is removed and the others refitted, expressed as the height of an isolated tone with the same energy. By the Schur complement of the normal equations,
+
+$$
+\sigma_p=\sqrt{\frac{\Delta E_p}{2W}},\qquad \Delta E_p=W\Bigl[\frac{\alpha_p^2}{(G_c^{-1})_{pp}}+\frac{\beta_p^2}{(G_s^{-1})_{pp}}\Bigr]. \tag{49}
+$$
+
+For an isolated tone $\sigma_p=\lvert c_p\rvert$. When two components share energy, for example two fits of one tone or two tones within one main lobe, $\sigma_p<\lvert c_p\rvert$. Components are pruned by significance, the least significant first, which removes duplicates and sidelobe fits without imposing a minimum distance between distinct tones.
+
+*Seed frequency.* A new component is placed at the maximum of the energy that one real tone explains in the current residual $r=R/W$,
+
+$$
+P(\omega)=\frac{\bigl(\operatorname{Re}r(\omega)\bigr)^2}{g_c(\omega)}+\frac{\bigl(\operatorname{Im}r(\omega)\bigr)^2}{g_s(\omega)},\qquad g_{c,s}(\omega)=\frac{1\pm k(2\omega)}2, \tag{50}
+$$
+
+which is the least-squares frequency of a single real tone. For a complex tone it reduces to the maximum of $\lvert r\rvert^2$, the classical periodogram estimator [12]; the denominators account for the tone's own image at $-\omega$, which biases the maximum of $\lvert r\rvert$ with the rectangular kernel. Newton on (50) uses the derivatives of $r$ (Proposition 5 minus closed-form kernel derivatives) and of $k$. Within one bin of $\omega=0$, where the sine atom vanishes, $\lvert r\rvert^2$ is used.
+
+### 6.5 Joint refinement of frequencies
+
+Refining each frequency on its partial residual with the others fixed, a coordinate method such as RELAX [13], converges slowly when components are strongly coupled. In a development comparison on exact tones 1–2 bins apart (four relative phases each), up to four such sweeps per round left a spurious third component 15–25 dB below the stronger tone in 10 of 16 configurations, and heights biased by up to 2.4 dB in 2 more. FAFT instead refines all frequencies together by Gauss–Newton on the full nonlinear least-squares problem, with Levenberg–Marquardt damping [14, 15], and re-solves the amplitudes exactly at each new set of frequencies (variable projection [16]). The derivative of a tone with respect to its frequency is the atom $D_p=u(-\alpha_pS_p+\beta_pC_p)$. Its inner products follow from (41) by differentiation under the integral, with $k'$ and $k''$ the derivatives of $k$:
+
+$$
+\langle C_p,D_q\rangle=\frac{\alpha_q}2\bigl[k'(\omega_p+\omega_q)-k'(\omega_p-\omega_q)\bigr],\qquad \langle S_p,D_q\rangle=-\frac{\beta_q}2\bigl[k'(\omega_p-\omega_q)+k'(\omega_p+\omega_q)\bigr], \tag{51}
+$$
+
+$$
+\langle D_p,D_q\rangle=\frac{\alpha_p\alpha_q}2\bigl[k''(\omega_p+\omega_q)-k''(\omega_p-\omega_q)\bigr]-\frac{\beta_p\beta_q}2\bigl[k''(\omega_p-\omega_q)+k''(\omega_p+\omega_q)\bigr], \tag{52}
+$$
+
+and the data side needs the transform and its first derivative at each selected frequency, which Proposition 5 provides in closed form:
+
+$$
+\langle y,D_p\rangle=\alpha_p\operatorname{Re}a'(\omega_p)-\beta_p\operatorname{Im}a'(\omega_p). \tag{53}
+$$
+
+The right side of the Gauss–Newton system is $\langle y,\cdot\rangle$ minus the model's inner products, obtained from (45) and (51) with the current amplitudes. A step is kept if $E_r$ does not grow beyond its own rounding ($64\varepsilon E$), and the damping then shrinks by 4; otherwise it grows by 8. Steps are limited to half a bin. Components farther apart than 4 bins (Hann; 8 for the rectangular kernel) are solved as separate clusters, each with its own damping, because their coupling is below −48 dB (Table 2); the global model still enters every right side. A cluster stops when every proposed step is below a stated tolerance, by default $10^{-4}$ bin, without evaluating that step. One iteration costs one evaluation of $(\mathcal A,\mathcal A')$ per moving component plus $O(m^3)$ algebra for a cluster of $m$ components; no scan, no sampling and no quadrature are involved.
+
+*Resolution.* On exact tones, the joint fit separates two tones 1.0 and 1.5 bins apart at every tested relative phase, to $10^{-6}$ of a bin, although $\lvert\mathcal A\rvert$ has a single maximum for the pair. This is not resolution added by the transform, which still has the kernels of Table 1. It is the information contained in the assumption that the data are tones. For noisy, modulated or non-tonal content no such separation is guaranteed, and the significance (49) decides whether a second component is supported by the energy it uniquely explains.
+
+### 6.6 The pursuit algorithm
+
+Algorithm 5 combines these steps. The transform is scanned once, as in Algorithm 4. Later rounds seed from local maxima of the *residual* on the same grid, $\bigl\lvert a(\omega_j)-\sum_p\bigl[c_pk(\omega_j-\omega_p)+\overline{c_p}k(\omega_j+\omega_p)\bigr]\bigr\rvert$. This costs $O(P)$ kernel evaluations per grid point and no new transform values. Within a round, the components accepted first carry provisional amplitudes, so a seed they already explain, typically a sidelobe, is skipped before any Newton step. This is the idea of the CLEAN deconvolution of radio astronomy [17] and of matching pursuit [18], with an orthogonal (joint) refit after each round as in orthogonal matching pursuit [19]. In Algorithm 5, $Z_j$ are the scanned centred values, $\mathcal C$ the component list, and $\mathcal X$ the rejected seed positions.
+
+```text
+Algorithm 5  PURSUE(prepared, [ω_lo, ω_hi], ρ, floor)
+  E ← ENERGY(prepared)                                   ▷ Proposition 8
+  Z_j ← AFT^c(ω_j) on the scan of Algorithm 4             ▷ the only scan
+  floor ← max(absolute, relative · max_j |Z_j|);  C ← ∅;  X ← ∅
+  repeat for at most 6 rounds:
+      r_j ← Z_j − Σ_{p∈C} [c_p k(ω_j−ω_p) + conj(c_p) k(ω_j+ω_p)]
+      for each local maximum of |r_j| ≥ floor, strongest first, not near C ∪ X:
+          if components added in this round explain it below floor: skip
+          ω ← Newton maximum of P(ω), (50), on the residual
+          add ω to C with its provisional amplitude
+      if nothing was added: stop (no seeds)
+      POLISH(C)                                           ▷ Section 6.5, (51)–(53)
+      while the least significant σ_p < floor:             ▷ (49)
+          move p to X; refit; neighbours of p become active
+      if any were removed: POLISH(C) and prune again
+      if √(E_r/W) ≤ floor: stop (certified)               ▷ (48)
+  POLISH(C) once more with every component active; prune
+  return C with ω_p, c_p, A(ω_p), σ_p, and E, E_r, √(E_r/W)
+```
+
+The final pass re-checks components settled in early rounds, which still carried the weak leakage of clusters refined later. Every reported frequency is a converged minimum of the joint residual within the stated tolerance, and every reported value is either a fitted amplitude or an exact transform value. The stopping reason is reported: no seed above the floor, a certificate below the floor, or a round or capacity limit.
+
+### 6.7 Tracking consecutive windows
+
+When windows of one input are analysed in order, a frame's components predict the next frame's: the frequency of a stable partial changes little over a hop, and its amplitude is re-solved in the new window (previous phases belong to another window). Algorithm 6 therefore replaces the scan by a joint polish started at the predicted frequencies, and pays for a full pursuit only when needed. Peak tracking with births and deaths of partials is standard in sinusoidal modelling [20, 21]; what is specific here is that a tracked frame needs no scan and carries the certificate (48). Track identities give the selection stability; no smoothing filter is applied to the reported values, which remain exact optima of each window's fit.
+
+A tone $\alpha C+\beta S$ of normalized height $m=\lvert c\rvert$ that is absent from the model, and uncorrelated with it, adds its own weighted energy to the residual:
+
+$$
+\Delta E_r=W\Bigl[2m^2+\tfrac12\bigl(\alpha^2-\beta^2\bigr)k(2\omega)\Bigr]\approx2m^2W, \tag{54}
+$$
+
+where the image term $k(2\omega)$ is negligible away from $\omega=0$. A new component above the birth floor $m_b$ therefore cannot appear without either breaking the certificate (48) or raising $E_r$ by about $2m_b^2W$. Algorithm 6 rescans in that case. It also rescans at a fixed interval, because a birth that coincides with an equal fall of residual energy elsewhere is not detected by (54); this novelty test is a heuristic.
+
+```text
+Algorithm 6  TRACK(next prepared window, tracks)
+  E ← ENERGY;  jump ← 2π/T;  every track predicts ω̂ = ω + clamp(ω − ω_prev, ±jump/2)
+  if no tracks, or the rescan interval is due: go to SCAN
+  C ← tracks at ω̂;  POLISH(C)                       ▷ no scan
+  drop components that moved more than jump from ω̂, then prune by σ_p
+  floor ← relative · max |A(ω_p)|;  b ← √(E_r/W)
+  if b ≤ floor (certified) or E_r ≤ E_ref + 2 m_b² W:   ▷ (48), (54)
+      continue matched tracks;  E_ref ← min(E_ref, E_r);  return
+SCAN:
+  C ← PURSUE;  E_ref ← E_r
+  match components to predictions within jump, strongest first
+  unmatched component with |c| ≥ birth floor: new track     ▷ hysteresis:
+  unmatched track: missed; ended after `hold` missed frames  ▷ birth > survival
+```
+
+In the synthetic test of Section 7, a tracked window cost two to four evaluations of $(\mathcal A,\mathcal A')$ per component, instead of the scan of Algorithm 4, which needs $\rho(\omega_{\mathrm{hi}}-\omega_{\mathrm{lo}})T/(2\pi)$ transform values. It never reports a frequency that is not a converged optimum of the current window.
 
 ---
 
@@ -589,17 +784,35 @@ Query cost grows linearly with the number of rotations; the sizes 256…4096 gav
 
 *Figure 3. Left: difference between zoom-sampled transforms and the AFT. Middle: cost of one arbitrary frequency against window size. Right: cost of a list of relevant peaks, with the FFT of the samples as a reference for a different target.*
 
-**Continuous peaks.** The FAFT returned on average 19.2, 13.1 and 25.7 peaks per window. Every one was also found by the adaptive sampled-curve search, which found about 5% more. Those extra peaks are weak maxima next to stronger ones and are missed by the density-2 scan; density 4 recovers most of them. Of the peaks of the 64×-padded FFT of the source samples, 89–94% were recovered, with a median distance of 0.18–0.44 Hz. The bin spacing is 43 Hz; the reported AFT peaks are converged to $10^{-12}$ rad/sample on the continuous axis (Figure 4).
+**Continuous peaks.** The peaks in this paragraph are the maxima of Algorithm 4. The FAFT returned on average 19.2, 13.1 and 25.7 peaks per window. Every one was also found by the adaptive sampled-curve search, which found about 5% more. Those extra peaks are weak maxima next to stronger ones and are missed by the density-2 scan; density 4 recovers most of them. Of the peaks of the 64×-padded FFT of the source samples, 89–94% were recovered, with a median distance of 0.18–0.44 Hz. The bin spacing is 43 Hz; the reported AFT peaks are converged to $10^{-12}$ rad/sample on the continuous axis (Figure 4).
 
 ![Figure 4](https://geckos.ink/stuff/sinwhisky/figures/faft-circle-arcs-20260930/faft-peaks.svg)
 
 *Figure 4. The AFT of one window (blue) with its Newton-refined peaks, against the 64×-padded FFT of the source samples (orange). The ticks at the bottom are the fixed $N=1024$ DFT bins; the AFT peaks fall between them.*
+
+**Peak selection (synthetic).** Algorithms 4, 5 and 6 were compared on a signal with known partials, generated deterministically by the reference implementation: 44.1 kHz, 48 Hann windows of $N=1024$ samples with a hop of 512. It contains a harmonic note gliding from 220 to 226 Hz (8 partials, amplitudes $1000/k$), a second harmonic note at 330.4 Hz (5 partials, $400/k$) that enters halfway, a pair of tones at 2400 Hz and 1.5 bins above it (amplitudes 300 and 100), a tone of amplitude 20 at 3150 Hz (−40 dB relative to the strongest), and uniform noise of ±3. The circles were fitted hierarchically with a source tolerance of 4 and supports of at most 128 samples (547 rotations per window). All three algorithms used a relative floor of 1% (−40 dB). The truth is the instantaneous frequency of each partial at the window centre; the two windows that straddle the onset are not scored (46 windows, 13.5 partials per window). A partial counts as recovered when a reported frequency lies within half a bin, and a report farther than one bin from every partial counts as spurious. Heights compare the reported magnitude with $A/2$: Algorithm 4 reports $\lvert\mathcal A(\omega_p)\rvert/W$, Algorithms 5 and 6 the fitted $\lvert c_p\rvert$. Times are medians of five warmed runs on the same laptop.
+
+| | Algorithm 4 (scan and Newton) | Algorithm 5 (pursuit) | Algorithm 6 (tracking) |
+|---|---:|---:|---:|
+| Partials recovered | 89.2% | 100% | 100% |
+| Weak partials recovered (the −40 dB tone and the weaker tone of the pair) | 63.0% | 100% | 100% |
+| Reported per window / spurious per window | 12.7 / 1.33 | 13.4 / 0 | 13.5 / 0 |
+| Height error, median / 95th percentile | 0.044 / 4.70 dB | 0.009 / 0.56 dB | 0.009 / 0.58 dB |
+| Frequency error, median / 95th percentile, in bins | $6.2\cdot10^{-3}$ / 0.30 | $5.2\cdot10^{-4}$ / 0.017 | $5.3\cdot10^{-4}$ / 0.017 |
+| Evaluations of $(\mathcal A,\mathcal A',\mathcal A'')$ / rectangular sums, per window | 42 / 1,029 | 200 / 1,029 | 70 / 134 |
+| Time per window, median (mean) | 6.4 (6.3) ms | 20.6 (20.4) ms | 3.5 (6.7) ms |
+
+*Table 3. Peak selection on a synthetic signal with known partials (aggregate snapshot `docs/experiments/faft-pursuit-synthetic-20261004.json`).*
+
+With the rectangular weight on the same windows, Algorithm 4 reported 55.2 maxima per window, most of them sidelobes, and Algorithm 5 reported 14.5 components. The joint fit explained a median 99.9992% of the weighted energy, and its certificate (48) was a median 0.51 of the floor. The pursuit costs about three times the scan, because each Hann evaluation of $(\mathcal A,\mathcal A',\mathcal A'')$ costs about eight times a value (83 µs against 10 µs at 562 rotations, three rectangular derivative sums each); the energy $E$ costs 0.11 ms per window. Algorithm 6 tracked 40 of the 48 windows without a scan, 38 of them with the certificate below the floor, at a median 3.1 ms, and ran a full pursuit in 8 (the first window, 4 interval rescans and the 3 windows at the onset, detected by (54)), at a median 31 ms. Over the whole run its mean cost equals that of the scan, with the accuracy of the pursuit. Eighteen track identities lasted 8 windows or more, for 16 partials: the second and third harmonics of the first note restarted with new identities at the onset. Eleven further identities lived for 1–4 windows while the onset transient was modelled by tones. The second harmonic of the second note (660.9 Hz) lies only 0.24 bins from the third harmonic of the first; the scoring counts a pair this close as recovered by one report. These results come from a synthetic, mostly stationary signal that suits a tone model; pursuit and tracking have not yet been measured on the recording above.
 
 ---
 
 ## 8. Discussion and limitations
 
 **Circle rates are not the spectrum.** A natural hope is that the rates $\beta$ of the circles are themselves the frequencies of the sound, so that grouping them would yield the spectrum without any transform. Section 2.6 shows why this fails: a rate is twice an inscribed angle of the anchor triangle, divided by a duration, and the triangle's shape depends on the aperture. The measurements agree. On a synthetic test the rates clustered well below the true tone, and seeding the peak search from grouped rates recovered only 41–43% of the peaks and was slower than the scan. The frequencies of the signal are obtained from the transform of the circles, through the interference of all rotations (Remark 2), not from the rate of any single one.
+
+**Peak selection.** The maxima of $\lvert\mathcal A\rvert$ are exact, but their heights are not the components' heights: the window kernel shares every level with the neighbours (Tables 1 and 2), and a selection of maxima trades accuracy among the peaks it keeps. A joint tone fit makes that trade explicit and measurable: Proposition 8 accounts for the unexplained energy and bounds it at every frequency, and the significance (49) decides which components the data support. Its separation of tones inside one main lobe rests on the tone model, not on the transform; gliding partials and onsets are not tones, and the fit spends components on them.
 
 **Speed.** One exact continuous query is cheaper than the sampled-curve baselines and 3.3–3.5× cheaper than the per-interval evaluation of the same triplet curve, which calls trigonometric functions on every interval. A complete, fixed-bin spectrum of the *samples* remains much faster with an FFT. The advantage of the AFT is exactness and a free frequency axis, not asymptotic complexity.
 
@@ -609,7 +822,10 @@ Query cost grows linearly with the number of rotations; the sizes 256…4096 gav
 
 - Rotate and add in time: sliding windows that update only the rotations entering and leaving.
 - Circle fits with continuous joins, which remove the $\omega^{-1}$ tails of Corollary 3.
-- Certified bounds for peak completeness.
+- Tighter completeness certificates. The bound (48) is conservative when the residual is broadband, because it allows the whole residual energy at one frequency.
+- Chirp atoms, tones with a linear frequency change, for gliding partials and onsets, with the same closed-form inner products.
+- A first-derivative kernel: the Gauss–Newton step of Section 6.5 needs $\mathcal A$ and $\mathcal A'$ only, while the current evaluation also forms $\mathcal A''$.
+- Pursuit and tracking measured on recordings, including the windows of Section 7.
 - Circle determinations whose angular rates carry physical frequency. By (16), an aperture equal to the largest magnitude of the central difference makes the rate exact at a symmetric crest of a pure tone; whether any aperture rule achieves this away from crests is open.
 - Many frequencies at once: by (25), the AFT is a sum of simple poles at $\pm\beta_k$ with exponential numerators. Whether this structure admits a fast multi-frequency evaluation with a stated error bound is open.
 
@@ -617,7 +833,7 @@ Query cost grows linearly with the number of rotations; the sizes 256…4096 gav
 
 ## 9. Conclusion
 
-The geometric construction of Section 2 turns sampled data into a continuous piecewise-rotational curve. Every rotation follows from elementary geometry: its rate is twice an inscribed angle of the anchor triangle divided by a duration, its radius is fixed by the law of sines, and a line is its limit of infinite radius. The Fourier transform of this curve, the Angular Fourier Transform, has an exact closed form at every real frequency. Each arc contributes a term fixed by its centre height, its rate and its endpoints, and the time distance between arcs enters only as a phase. The Fast Angular Fourier Transform evaluates that form by rotating and adding the contributions of the fitted arcs, with no quadrature, no dense resampling and no transcendental work per rotation. Dense evaluation is therefore not a route to a more exact version of the same spectrum: it produces a sampled approximation with spectral images and join terms that are absent from the direct AFT. Combined with analytic derivatives, FAFT yields relevant frequencies on a continuous axis and, in the reported experiments, substantially reduces the cost of the continuous-model baselines. It is not claimed to replace the FFT for computing the complete fixed-bin spectrum of the source samples.
+The geometric construction of Section 2 turns sampled data into a continuous piecewise-rotational curve. Every rotation follows from elementary geometry: its rate is twice an inscribed angle of the anchor triangle divided by a duration, its radius is fixed by the law of sines, and a line is its limit of infinite radius. The Fourier transform of this curve, the Angular Fourier Transform, has an exact closed form at every real frequency. Each arc contributes a term fixed by its centre height, its rate and its endpoints, and the time distance between arcs enters only as a phase. The Fast Angular Fourier Transform evaluates that form by rotating and adding the contributions of the fitted arcs, with no quadrature, no dense resampling and no transcendental work per rotation. Dense evaluation is therefore not a route to a more exact version of the same spectrum: it produces a sampled approximation with spectral images and join terms that are absent from the direct AFT. Combined with analytic derivatives, FAFT yields relevant frequencies on a continuous axis and, in the reported experiments, substantially reduces the cost of the continuous-model baselines. Because the window kernel shares every peak's level with its neighbours, relevant frequencies are selected jointly: a closed-form tone fit gives each component's own height, accounts for the energy left unexplained with a bound at every frequency, and can be carried from window to window without rescanning. It is not claimed to replace the FFT for computing the complete fixed-bin spectrum of the source samples.
 
 ---
 
@@ -634,7 +850,17 @@ The geometric construction of Section 2 turns sampled data into a continuous pie
 9. R. N. Bracewell, *The Fourier Transform and Its Applications*, 3rd ed., McGraw-Hill, 2000.
 10. N. J. Higham, *Accuracy and Stability of Numerical Algorithms*, 2nd ed., SIAM, 2002.
 11. W. H. Press, S. A. Teukolsky, W. T. Vetterling and B. P. Flannery, *Numerical Recipes: The Art of Scientific Computing*, 3rd ed., Cambridge University Press, 2007.
+12. D. C. Rife and R. R. Boorstyn, "Single-tone parameter estimation from discrete-time observations," *IEEE Transactions on Information Theory* 20 (1974) 591–598.
+13. J. Li and P. Stoica, "Efficient mixed-spectrum estimation with applications to target feature extraction," *IEEE Transactions on Signal Processing* 44 (1996) 281–295.
+14. K. Levenberg, "A method for the solution of certain non-linear problems in least squares," *Quarterly of Applied Mathematics* 2 (1944) 164–168.
+15. D. W. Marquardt, "An algorithm for least-squares estimation of nonlinear parameters," *Journal of the Society for Industrial and Applied Mathematics* 11 (1963) 431–441.
+16. G. H. Golub and V. Pereyra, "The differentiation of pseudo-inverses and nonlinear least squares problems whose variables separate," *SIAM Journal on Numerical Analysis* 10 (1973) 413–432.
+17. J. A. Högbom, "Aperture synthesis with a non-regular distribution of interferometer baselines," *Astronomy and Astrophysics Supplement Series* 15 (1974) 417–426.
+18. S. G. Mallat and Z. Zhang, "Matching pursuits with time-frequency dictionaries," *IEEE Transactions on Signal Processing* 41 (1993) 3397–3415.
+19. Y. C. Pati, R. Rezaiifar and P. S. Krishnaprasad, "Orthogonal matching pursuit: recursive function approximation with applications to wavelet decomposition," *Proceedings of the 27th Asilomar Conference on Signals, Systems and Computers*, 1993, 40–44.
+20. R. J. McAulay and T. F. Quatieri, "Speech analysis/synthesis based on a sinusoidal representation," *IEEE Transactions on Acoustics, Speech, and Signal Processing* 34 (1986) 744–754.
+21. X. Serra and J. O. Smith III, "Spectral modeling synthesis: a sound analysis/synthesis system based on a deterministic plus stochastic decomposition," *Computer Music Journal* 14(4) (1990) 12–24.
 
 ### Reproducibility notes
 
-The mathematical definition of the method is contained in Definitions 1–3, Propositions 1–6, Corollaries 1–3, the kernel (37)–(38) and Algorithms 1–4. Sections 5.2 and 5.3 state the resonance guard and the numerical-stability thresholds used near DC and resonance, and Section 7 reports the fitting tolerance, support limit, sample format, window size, implementation language and version, and benchmark protocol. The reference implementation is `src/faft.rs` of the SinWhisky.rs crate. Its tests check the closed forms against independent Gauss–Legendre quadrature, including a flat arc at $10^{-12}$ relative, the derivatives against quadrature of the moments of (33) and against finite differences, dense evaluation against Proposition 6 including images and join terms, and FAFT against the per-interval evaluation on the triplet curve. They also check the geometric statements of this paper: the rates as doubled inscribed angles and the crest relation (16), the endpoint form (24), the infinite-radius limit of Section 2.5, and the element and array factors of (30). Figure 1 is generated by `tools/faft_geometry_figure.py`, which asserts (8) for its example. The method can therefore be interpreted and implemented from the manuscript alone.
+The mathematical definition of the method is contained in Definitions 1–3, Propositions 1–8, Corollaries 1–3, the kernel (37)–(38), the inner products (45)–(46) and (51)–(53), and Algorithms 1–6. Sections 5.2 and 5.3 state the resonance guard and the numerical-stability thresholds used near DC and resonance, and Section 7 reports the fitting tolerance, support limit, sample format, window size, implementation language and version, and benchmark protocol. The reference implementation is `src/faft.rs` of the SinWhisky.rs crate, with the selection of Sections 6.2–6.7 in `src/faft/pursuit.rs`; the synthetic comparison of Table 3 is `examples/pursuit_bench.rs`, which prints the aggregate snapshot. Its tests check the closed forms against independent Gauss–Legendre quadrature, including a flat arc at $10^{-12}$ relative, the derivatives against quadrature of the moments of (33) and against finite differences, dense evaluation against Proposition 6 including images and join terms, and FAFT against the per-interval evaluation on the triplet curve. For Section 6 they check the kernel against the exact transform of a tone, the widths and sidelobes of Table 1, the energy against independent integration, the certificate (48) at 4,000 frequencies, sidelobes explained by their tone, a −30 dB tone hidden on a strong flank, tones 1.0 and 1.5 bins apart separated to $10^{-6}$ of a bin, shared and isolated peak ranges, and stable track identities through a glide and an onset (`tests/faft_pursuit.rs`). They also check the geometric statements of this paper: the rates as doubled inscribed angles and the crest relation (16), the endpoint form (24), the infinite-radius limit of Section 2.5, and the element and array factors of (30). Figure 1 is generated by `tools/faft_geometry_figure.py`, which asserts (8) for its example. The method can therefore be interpreted and implemented from the manuscript alone.

@@ -44,7 +44,7 @@ The crate stays the authority. Every port is checked against vectors exported fr
 
 The rotate-and-add sums are closed forms, with series near resonance. Support phases are re-anchored every 64 intervals, as the crate does. The SIMD path evaluates two frequencies per `f64x2`.
 
-**Not ported:** the uniform-x resampler, `GeometryFrame`, circle-rate seeds (`PeakParams::circle_seeds`), the codec research frame, and the earlier FAFT controls.
+**Not ported:** the uniform-x resampler, `GeometryFrame`, circle-rate seeds (`PeakParams::circle_seeds`), the peak selection of `faft::pursuit` (kernel ranges, joint fit, pursuit, tracker), the codec research frame, and the earlier FAFT controls.
 
 **Limits:** static buffers (the `stub` runtime), so memory never grows. At most 4096 input samples, 65536 resampled outputs, zoom up to 255, and 8192 frequencies per call (`values` chunks longer lists).
 

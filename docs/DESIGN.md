@@ -178,6 +178,23 @@ default. Costs are O(rotations) per frequency and O(rotations × scan points) pe
 peak list. No FFT speed claim is made. [FAFT.md](FAFT.md) holds the definition,
 measurements and limits.
 
+A list of maxima is not a list of components: the window kernel `K` (the exact
+transform of the weight) shares every peak's height with its neighbours. The
+`faft::pursuit` submodule therefore treats relevant frequencies as a jointly
+fitted model of real tones around the window centre. All Gram entries come from
+`K`, `K'` and `K''`. The data side is FAFT values and first derivatives at the
+selected frequencies. The residual energy needs one scalar, the weighted curve
+energy, which is the only quantity computed by numerical integration
+(Gauss-Legendre panels with bounded phase). Cauchy-Schwarz then bounds the
+residual spectrum at every real frequency. Components are pruned by
+significance (unique energy), not by a distance. Frequencies are polished by
+damped Gauss-Newton per coupled cluster, with a stated step tolerance. Seeds
+come from the residual on the single scan grid. `PeakTracker` replaces the scan
+by a polish from predicted frequencies and rescans on an interval or when the
+residual energy grows (a heuristic novelty test). Separation inside one main
+lobe comes from the tone model, not from added transform resolution. `peaks`
+is unchanged and remains the maxima of the transform.
+
 ## FFT phasor control (formerly `faft`)
 
 `phasor_fft::transform` computes the sampled DFT through radix-2 rotations. This is a

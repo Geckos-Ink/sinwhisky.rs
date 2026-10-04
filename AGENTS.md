@@ -96,6 +96,16 @@ code. Optional NumPy/FFmpeg research tools must not become library dependencies.
   maxima of that function; the duration-spaced scan is a seed heuristic. Arcs use
   the endpoint kernel outside the resonance guard and the moment form inside it;
   values and derivatives share that split. Protected by `tests/faft.rs`.
+- **Peak selection:** [pursuit](src/faft/pursuit.rs) treats relevant frequencies
+  as a jointly fitted tone model; `peaks` stays the exact maxima of |FAFT| and its
+  arithmetic is unchanged (port vectors reproduce byte for byte). Gram entries
+  come only from the window kernel K, K', K''; projections are FAFT values/first
+  derivatives. Weighted curve energy is the only numerical integration
+  (Gauss-Legendre panels, at most pi of phase each). Residual bound
+  `sqrt(residual/W)` holds at every real omega. Pruning is by significance
+  (unique energy), never by distance; frequencies move by damped Gauss-Newton per
+  coupled cluster with a stated step tolerance. The tracker's novelty test is a
+  heuristic, backed by interval rescans. Protected by `tests/faft_pursuit.rs`.
 - **Frame coverage/error:** [ResearchFrame::from_analysis](src/codec.rs) partitions
   source samples into nonempty half-open ranges. Every predicted source sample
   is checked against tolerance. Decode has no dependency on original PCM.
@@ -113,7 +123,9 @@ uniform-x circle predictors and does not blend segment boundaries.
 FAFT consumer: source samples → circle determination (`GeometryFrame` or
 `AngularFrame`) → `CircleCurve` rotations → `Faft` prepared window → exact values
 at arbitrary frequencies, analytic derivatives, and relevant peaks. Zoom only
-samples the same curve for synthesis and comparison.
+samples the same curve for synthesis and comparison. Selection: `Faft` →
+`pursue` (one scan, residual seeds, joint fit, certificate) or, for consecutive
+windows, `PeakTracker::update` (scan-free polish, rescans on interval/novelty).
 
 Ports consumer (outside the crate): `examples/port_vectors` → `ports/fixtures/vectors.json`
 → `ports/wasm-simd` (f64 resampler, AFT, FAFT; scalar and SIMD) → `ports/webgpu` (f32
@@ -307,6 +319,32 @@ paper's geometric identities (doubled inscribed angles and the crest rate,
 endpoint form, infinite-radius line limit, element × array factor); doctest in
 the module. Definition: [docs/FAFT.md](docs/FAFT.md).
 
+### [src/faft/pursuit.rs](src/faft/pursuit.rs)
+
+Child module of `faft` (private access to `Faft` atoms, `newton`, `scan_grid`,
+`grid_seeds`). Owns the window kernel (`kernel`, `kernel_range`, private
+derivatives), `energy` (stacked rotations summed before squaring), `peak_range`
+(measured on |FAFT|, valley-shared sides flagged), `fit` (cos/sin Gram blocks,
+Cholesky with dependent-atom dropping, inverse diagonal for significance),
+`pursue` (single scan; residual seeds on that grid; in-round provisional
+amplitudes skip explained seeds; Newton on the single-tone least-squares
+criterion; per-cluster Levenberg-Marquardt polish with variable projection;
+significance pruning with seed memory; final all-cluster pass) and
+`PeakTracker` (predicted polish, jump limit, significance prune, certificate or
+novelty `2*m^2*W` over the best residual since the last scan, interval rescans,
+birth/survival hysteresis, hold). Fitted values are `(alpha - i*beta)/2` rotated
+to the window start; `observed` is FAFT there. Separation inside one main lobe
+is a tone-model property, not transform resolution. Not ported.
+
+### [examples/pursuit_bench.rs](examples/pursuit_bench.rs)
+
+Deterministic synthetic comparison (no audio, no clock in the data) of `peaks`,
+`pursue` and `PeakTracker` on the same fitted windows: recall, weak recall,
+spurious reports, height/frequency errors, evaluation counts, timings, tracker
+paths and identities, rectangular sidelobe counts. Prints one aggregate JSON;
+the published snapshot is `docs/experiments/faft-pursuit-synthetic-20261004.json`.
+Timings are machine-specific; regenerate rather than edit numbers.
+
 ### [examples/faft_bench.rs](examples/faft_bench.rs), [tools/faft_compare.py](tools/faft_compare.py), [tools/faft_figures.py](tools/faft_figures.py)
 
 Rust JSON Lines per frame: hierarchical fit, FAFT preparation/queries/peaks
@@ -416,7 +454,10 @@ aperture/crest relation. Then come the phasor, anchored and endpoint forms, the
 high-frequency decay from value and slope jumps, time distance as phase
 (element × array factor), Hann, derivatives, Poisson/zoom, FAFT versus FFT and
 Goertzel, numerics, pseudocode, peak refinement, and results copied from the
-FAFT snapshot. Keep its numbers and claims synchronized with FAFT.md. Write
+FAFT snapshot. Section 6 also owns peak selection: the window kernel and peak
+ranges (Tables 1–2), the zero-sum argument, the closed-form joint fit and
+certificate (Propositions 7–8), joint Gauss-Newton, Algorithms 5–6, and Table 3
+from the synthetic pursuit snapshot. Keep its numbers and claims synchronized with FAFT.md. Write
 paragraphs on single lines and display math as `$$` blocks without `\\`, `\,`,
 `\{` or `\|`, so the web renderer does not strip escapes. Numbered equations use
 `\tag`. Every formula must parse in KaTeX. Figure 1 is
@@ -649,6 +690,7 @@ extent, and frame-coverage tests detect these errors.
 | `AdaptiveSpectrum` | [adaptive frequencies](src/adaptive_faft.rs) | Sampled-control peaks; explicit uncertainty and work/heuristic stops |
 | `GeometryFrame`, geometric queries | [direct geometry](src/geometric_faft.rs) | Source-point circles, peak-error bound, O(pieces*bins) finite sums |
 | `CircleCurve`, `Faft`, `Rotation` | [FAFT](src/faft.rs) | Exact continuous transform of circle curves; peaks at real frequencies; no zoom/FFT |
+| `Pursuit`, `SpectralFit`, `PeakRange`, `PeakTracker` | [peak selection](src/faft/pursuit.rs) | Joint tone fit, residual certificate, measured ranges, tracking; not a completeness proof beyond the stated bound |
 | `PhasorFrame`, `transform` | [FFT phasor control](src/phasor_fft.rs) | Rotating-circle optimization and sampled FFT; RMS bound, no wire format |
 | `ResearchFrame`, `SegmentModel` | [src/codec.rs](src/codec.rs) | Experimental in-memory prediction only |
 | Periodic angular AFT | [src/aft.rs](src/aft.rs) | Continuous angular interpolant, explicit joins and closing interval |
@@ -672,6 +714,7 @@ cargo test --offline --test contracts
 cargo test --offline --test reference_vectors
 cargo test --offline --test cli
 cargo test --offline --test faft
+cargo test --offline --test faft_pursuit
 cargo test --offline --test phasor_fft
 cargo test --offline --test geometric_faft
 cargo test --offline --test adaptive_faft
@@ -725,6 +768,7 @@ python3 tools/geometric_compare.py /path/to/music.mp3 /tmp/geometric-trial \
 FAFT measurements (NumPy + Cargo; WAV input avoids FFmpeg):
 
 ```sh
+cargo run --offline --release --example pursuit_bench   # synthetic peak selection JSON
 cargo build --offline --release --example faft_bench
 python3 -m unittest discover -s tests -p test_faft_compare.py -v
 python3 tools/faft_compare.py /path/to/music.wav /tmp/faft-trial
@@ -770,6 +814,7 @@ inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz auto
 | FAFT exactness/derivatives/AFT same curve/zoom images/peaks/validation | `tests/faft.rs`, doctest; optional `tests/test_faft_compare.py` |
 | Paper identities: inscribed-angle rates, crest rate, endpoint form, line limit, element × array factor | `tests/faft.rs` (`rotation_rates_are_twice_the_inscribed_angles_of_the_anchor_triangle`, `arc_transform_is_fixed_by_its_endpoints`, `line_is_the_infinite_radius_limit_of_an_arc`, `identical_rotations_factor_into_element_and_array_terms`) |
 | Endpoint kernel: flat-arc accuracy, derivatives as moment integrals | `flat_arcs_keep_relative_accuracy_away_from_resonance`, `derivatives_match_quadrature_of_moments` |
+| Kernel = tone transform, Table 1 widths, energy, joint fit, certificate, sidelobes, hidden weak tone, in-lobe separation, peak ranges, tracker identities | `tests/faft_pursuit.rs` |
 | FFT phasor kernel/circles/precision/tree/line limits | `tests/phasor_fft.rs`; optional `tests/test_phasor_compare.py` |
 | CLI boundary | `command_line_modes_and_failures` |
 | Music wrapper/blocks/bitrate/fractional upscale | Optional `tests/test_music.py` integration suite |
@@ -801,7 +846,9 @@ This initial unpublished API may evolve; document every behavior change.
   standalone Cargo tests, optional live comparison and listening scripts, and
   `test_music.sh` with encoded-bitrate reduction and block-based sample-rate upscaling.
 - **Experimental:** FAFT, the exact continuous transform of circle curves, with
-  continuous relevant peaks (measured, not complete); hierarchical
+  continuous relevant peaks (measured, not complete) and their selection as a
+  jointly fitted tone model with a residual certificate and frame tracking
+  (synthetic evidence only); hierarchical
   children/checked variable-support merges and bounded adaptive relevant-frequency
   queries; the geometry-first sampled-spectrum control with peak-error limits;
   the FFT phasor control's rotating-circle selection with per-circle precision and

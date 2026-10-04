@@ -151,6 +151,19 @@ exact continuous query took 2.4–10.6 µs and a converged peak list 1.4–10.9 
 against 17–49 ms for the earlier adaptive search. An FFT of the samples remains
 faster for a complete fixed-bin spectrum of the samples.
 
+A maximum is not a component: the window kernel shares each peak's height with
+its neighbours, so a list of maxima carries leakage, sidelobes and hidden weak
+tones. `Faft::pursue` selects relevant frequencies as a jointly fitted tone
+model. It uses closed-form Gram entries from the kernel, joint Gauss-Newton
+frequencies and significance pruning, and returns each tone's own height, the
+residual energy and a bound on the unexplained spectrum at every frequency.
+`PeakTracker` carries the selection across consecutive windows without
+rescanning. `Faft::kernel`, `kernel_range` and `peak_range` measure how far a
+peak's level extends. On a synthetic test with known partials, pursuit raised
+recall from 89% to 100% with no spurious peaks, and tracking cost a median 3.5 ms
+per window against 6.4 ms for the scan (see
+[FAFT.md](docs/FAFT.md#selecting-relevant-frequencies)).
+
 ```rust
 use sinwhisky::faft::{CircleCurve, PeakParams, Weighting};
 use sinwhisky::geometric_faft::{GeometryFrame, GeometryParams, HierarchyParams};
@@ -243,7 +256,7 @@ Subdividing a parent circle alone cannot predict unknown error; source-informed 
 or residual information are required.
 
 ```sh
-cargo test --offline --test faft --test spectral --test aft --test phasor_fft --test geometric_faft --test adaptive_faft
+cargo test --offline --test faft --test faft_pursuit --test spectral --test aft --test phasor_fft --test geometric_faft --test adaptive_faft
 # Optional: Python + NumPy + Cargo; a PCM16 WAV input needs no FFmpeg.
 python3 tools/faft_compare.py /path/to/music.wav /tmp/faft-trial
 # Optional: Python + NumPy + Matplotlib + Pillow + FFmpeg.

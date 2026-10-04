@@ -4,7 +4,11 @@ This is the reference definition of FAFT (Fast Angular Fourier Transform) in thi
 crate. It is implemented in [src/faft.rs](../src/faft.rs), tested in
 [tests/faft.rs](../tests/faft.rs), and measured with
 [examples/faft_bench.rs](../examples/faft_bench.rs) and
-[tools/faft_compare.py](../tools/faft_compare.py). The earlier experiments in
+[tools/faft_compare.py](../tools/faft_compare.py). Peak selection (kernel, peak
+ranges, joint tone fit, tracking) is in
+[src/faft/pursuit.rs](../src/faft/pursuit.rs), tested in
+[tests/faft_pursuit.rs](../tests/faft_pursuit.rs) and measured with
+[examples/pursuit_bench.rs](../examples/pursuit_bench.rs). The earlier experiments in
 [COMPRESSION.md](COMPRESSION.md) remain as controls. This page says which of them
 are, and are not, the transform. A paper-style mathematical presentation is in
 [PAPER_FAFT.md](PAPER_FAFT.md).
@@ -233,6 +237,83 @@ lay at 0.018–0.048, all below the tone. The spectrum's peaks come from all
 rotations interfering, not from any single rate. The continuous frequencies are
 therefore obtained from the transform of the circles, not read off their rates.
 
+## Selecting relevant frequencies
+
+`peaks` finds the maxima of `|FAFT|` exactly. A maximum is not a component,
+though. Every tone has the shape of the window kernel
+`K(nu) = integral w(t) exp(-i*nu*(t-tc)) dt` around its frequency, plus an image
+at `-omega`. So the transform at a selected frequency is that tone's own height
+plus the leakage of every other component through `K(omega_p - omega_q)`.
+Selecting maxima one by one is a zero-sum choice:
+
+- reported heights and positions are biased by neighbours;
+- sidelobes are reported as peaks (rectangular: -13 dB, -18 dB, ..., all above a
+  1% floor);
+- a weak tone on a strong flank has no maximum of its own.
+
+A missed component's energy is not discarded. It stays in the others' heights.
+The continuous axis removes grid scalloping (3.92 dB rectangular, 1.42 dB Hann
+on a DFT grid), not leakage. Leakage is a property of `K` and `T`, so a denser
+scan cannot remove it.
+
+| Kernel, in bins of `2*pi/T` | Rectangular | Hann |
+|---|---:|---:|
+| Half-width at -3 / -6 / -20 dB | 0.442 / 0.603 / 0.908 | 0.719 / 0.998 / 1.650 |
+| First null | 1 | 2 |
+| Highest sidelobe | -13.26 dB | -31.47 dB |
+| Largest height change from an equal neighbour at >= 2 bins | +1.05 / -1.19 dB | +0.23 / -0.24 dB |
+| ... from a -20 dB neighbour at >= 2 / >= 4 bins | ±0.11 / ±0.06 dB | ±0.023 / ±0.003 dB |
+
+`Faft::kernel(nu)` and `kernel_range(db)` give the ideal shape. `peak_range(omega, db)`
+measures a peak's range on the transform itself: the interval where `|FAFT|`
+stays within `db` of the peak. A side that meets a valley above that level is
+flagged as shared. A range wider than the kernel's means unresolved neighbours,
+modulation or non-tonal content.
+
+`Faft::fit(omegas)` and `Faft::pursue` treat the list as a model instead. They
+fit real tones `alpha*cos(w(t-tc)) + beta*sin(w(t-tc))` by weighted least squares:
+
+- **Closed form.** The Gram entries are `(k(wp-wq) ± k(wp+wq))/2` with
+  `k = K/W`, and the cos/sin blocks decouple. The right sides are `Re/-Im` of
+  FAFT at the selected frequencies.
+- **Residual energy and certificate.** The residual energy is
+  `E - W*(alpha.b_c + beta.b_s)`, where `E = integral y^2 w`. `E` is computed by
+  Gauss-Legendre panels; it is the only integration and one scalar per window.
+  By Cauchy-Schwarz, the normalized residual spectrum is at most
+  `sqrt(residual/W)` at every real frequency. When that bound is below the
+  floor, nothing above the floor is missing anywhere.
+- **Significance.** A component's unique energy, from the inverse Gram diagonal,
+  expressed as an isolated tone's height. It decides pruning, so duplicates and
+  sidelobe fits go while close distinct tones stay.
+- **Joint polish.** Damped Gauss-Newton (Levenberg-Marquardt) on all
+  frequencies and amplitudes, per coupled cluster (4 bins Hann, 8 rectangular).
+  Inner products of the frequency-derivative atom come from `K'` and `K''`, and
+  the data side from FAFT's analytic `F` and `F'`. Amplitudes are re-solved at
+  each step (variable projection). It stops at a stated step tolerance (default
+  1e-4 bin).
+- **Pursuit.** One scan, then seeds from the residual on the same grid (no new
+  transform values). Seeds that components accepted earlier in the round
+  already explain are skipped without Newton. Newton on the single-tone
+  least-squares criterion places each seed; polish, prune, repeat. A final pass
+  polishes every cluster.
+
+On exact tones the joint polish separates two tones 1.0 and 1.5 bins apart at
+every tested phase, inside one Hann main lobe. That comes from the tone model,
+not from added transform resolution. A coordinate method (partial-residual
+sweeps, RELAX-style) was tried first and left spurious satellites in 10 of 16
+such cases.
+
+`PeakTracker` analyses consecutive windows. Each frame polishes the previous
+components from their predicted frequencies, without a scan, and prunes by
+significance. It accepts the result when the certificate is below the floor, or
+when the residual energy has not grown by a birth-floor tone's `2*m^2*W` over
+the best residual since the last scan. Otherwise, and every `rescan_every`
+frames, it runs a full pursuit. Tracks continue within one bin, start above a
+birth floor, survive down to the pursuit floor (hysteresis) and end after
+`hold` missed frames. No smoothing is applied: reported values stay exact optima
+of each window. The novelty test is a heuristic; the interval rescan bounds how
+long a masked birth can wait.
+
 ## Measured results
 
 Setup: the supplied Beethoven MP3 was decoded read-only to 44.1 kHz PCM16 with
@@ -359,10 +440,55 @@ weak source peaks can differ.
 
 ![Continuous FAFT peaks with the source FFT and the fixed DFT bins](figures/faft-circle-arcs-20260930/faft-peaks.svg)
 
+### Peak selection on known partials (synthetic)
+
+The Beethoven peaks above are `peaks` (maxima). Selection was compared on a
+deterministic synthetic signal generated by `examples/pursuit_bench.rs`:
+
+- 44.1 kHz, 48 Hann windows of 1,024 samples, hop 512;
+- a harmonic note gliding from 220 to 226 Hz (8 partials, `1000/k`);
+- a second note at 330.4 Hz (5 partials, `400/k`) entering halfway;
+- a 300/100 pair 1.5 bins apart at 2.4 kHz;
+- a -40 dB tone at 3.15 kHz, and noise of ±3.
+
+The curve is a hierarchical fit with tolerance 4 and span 128 (547 rotations
+per window). All methods use a 1% floor. Truth is the instantaneous frequency
+at window centres, and the 2 windows straddling the onset are not scored.
+Recovered means within half a bin; spurious means more than a bin from every
+partial. Times are medians of 5 warmed runs (arm64, Rust 1.98.1).
+Snapshot: [faft-pursuit-synthetic-20261004.json](experiments/faft-pursuit-synthetic-20261004.json).
+
+| | `peaks` | `pursue` | `PeakTracker` |
+|---|---:|---:|---:|
+| Partials recovered (weak ones) | 89.2% (63.0%) | 100% (100%) | 100% (100%) |
+| Reported / spurious per window | 12.7 / 1.33 | 13.4 / 0 | 13.5 / 0 |
+| Height error median / p95 | 0.044 / 4.70 dB | 0.009 / 0.56 dB | 0.009 / 0.58 dB |
+| Frequency error median / p95 (bins) | 6.2e-3 / 0.30 | 5.2e-4 / 0.017 | 5.3e-4 / 0.017 |
+| Derivative evaluations / rect sums per window | 42 / 1,029 | 200 / 1,029 | 70 / 134 |
+| Time per window, median (mean) | 6.4 (6.3) ms | 20.6 (20.4) ms | 3.5 (6.7) ms |
+
+With rectangular weighting, `peaks` reported 55.2 maxima per window (mostly
+sidelobes) and `pursue` 14.5 components. The pursuit explained a median 99.9992%
+of the weighted energy, with a median certificate of 0.51 of the floor.
+
+A Hann derivative evaluation costs about 83 µs against 10 µs for a value at 562
+rotations, which makes the pursuit about 3× the scan. The tracker ran 40 of 48
+windows without a scan, 38 of them certified, at a median 3.1 ms. Its 8 full
+pursuits (first window, 4 interval rescans, 3 onset windows found by novelty)
+took a median 31 ms. Over the run its mean cost equals the scan's, with the
+pursuit's accuracy.
+
+There were 18 identities lasting 8 or more windows for 16 partials: two partials
+of the first note restarted at the onset. 11 short identities (1–4 windows)
+modelled the onset transient. One truth pair is only 0.24 bins apart (660.9 and
+about 669 Hz) and counts as recovered by one report. These are synthetic,
+mostly stationary tones that suit the model; pursuit and tracking are not yet
+measured on the recording.
+
 ## Use
 
 ```rust
-use sinwhisky::faft::{CircleCurve, PeakParams, Weighting};
+use sinwhisky::faft::{CircleCurve, PeakParams, PursuitParams, Weighting};
 use sinwhisky::geometric_faft::{GeometryFrame, GeometryParams, HierarchyParams};
 fn main() -> Result<(), sinwhisky::Error> {
     let samples: Vec<f64> = (0..512).map(|i| 1000.0 * (0.3137 * i as f64).sin()).collect();
@@ -372,16 +498,24 @@ fn main() -> Result<(), sinwhisky::Error> {
     let off_grid = faft.value(0.31)?; // any real omega, including above pi
     let peaks = faft.peaks(PeakParams::default())?.peaks;
     assert!(!peaks.is_empty() && off_grid.re.is_finite());
+    // Components: jointly fitted heights, residual energy and its certificate.
+    let model = faft.pursue(PursuitParams::default())?;
+    assert!(model.explained() > 0.99 && model.bound.is_finite());
     Ok(())
 }
 ```
 
-A similar example is a doctest in [src/faft.rs](../src/faft.rs).
+A similar example is a doctest in [src/faft.rs](../src/faft.rs). For
+consecutive windows, create one `PeakTracker::new(TrackerParams::default())?`
+and call `tracker.update(&faft)?` per window; each `TrackedPeak` carries a
+stable `id`.
 
 ## Reproduce
 
 ```sh
 cargo test --offline --test faft
+cargo test --offline --test faft_pursuit
+cargo run --offline --release --example pursuit_bench   # synthetic, prints JSON
 cargo build --offline --release --example faft_bench
 python3 -m unittest discover -s tests -p test_faft_compare.py -v
 # Either decode to PCM16 WAV first (macOS, no FFmpeg needed)...
@@ -416,9 +550,11 @@ and adaptive modules keep their names and behaviour as sampled-predictor control
 - Continuous joins: remove the tolerance-bounded value jumps between rounded
   circles. They are why the zoom difference ends as `1/z`, and they add
   `1/omega` tails.
-- Cheaper complete peak lists. Measure a coarse approximate seed pass against
-  the exact scan and keep Newton on the exact FAFT for every reported value. Also
-  test bounds that certify no peak above the floor was missed.
+- Peak selection on recordings: measure `pursue` and `PeakTracker` on the
+  Beethoven windows. Tighter certificates than `sqrt(residual/W)` for broadband
+  residuals. Chirp atoms (linear frequency change) for glides and onsets. A
+  first-derivative-only kernel, since Gauss-Newton needs `F` and `F'` but the
+  current evaluation also forms `F''`.
 - Circle determination whose angular rates carry physical frequency, so that
   references could seed peaks. The current rates do not.
 - Port the endpoint kernel to `ports/wasm-simd` and `ports/webgpu`, which still

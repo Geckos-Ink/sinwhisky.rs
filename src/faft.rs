@@ -22,8 +22,12 @@
 //! and costs O(rotations); a dense spectrum is not faster than an FFT of the source
 //! samples, which computes a different (sampled) target.
 //!
+//! `peaks` returns the exact maxima of |FAFT|. Because the window kernel shares
+//! each maximum's height with its neighbours, `pursue`, `fit` and `PeakTracker`
+//! (module `pursuit`) select relevant frequencies as a jointly fitted model.
+//!
 //! ```
-//! use sinwhisky::faft::{CircleCurve, PeakParams, Weighting};
+//! use sinwhisky::faft::{CircleCurve, PeakParams, PursuitParams, Weighting};
 //! use sinwhisky::geometric_faft::{GeometryFrame, GeometryParams, HierarchyParams};
 //! let samples: Vec<f64> = (0..512).map(|i| 1000.0 * (0.3137 * i as f64).sin()).collect();
 //! let params = GeometryParams { max_error: 0.5, max_span: 64, ..GeometryParams::default() };
@@ -33,6 +37,10 @@
 //! let peaks = faft.peaks(PeakParams::default())?.peaks;
 //! let strongest = peaks.iter().max_by(|a, b| a.magnitude().total_cmp(&b.magnitude())).unwrap();
 //! assert!((strongest.omega - 0.3137).abs() < 1e-3 && off_grid.re.is_finite());
+//! // Relevant frequencies as a jointly fitted tone model (see `pursuit`): each
+//! // component's own height, the residual energy and a bound valid at every omega.
+//! let model = faft.pursue(PursuitParams::default())?;
+//! assert!(model.explained() > 0.99 && model.bound.is_finite());
 //! # Ok::<(), sinwhisky::Error>(())
 //! ```
 use crate::aft::{AngularFrame, AngularHalf};
@@ -41,6 +49,12 @@ use crate::spectral::Complex;
 use crate::{buffer, Error};
 use std::f64::consts::{PI, TAU};
 use std::ops::Range;
+
+mod pursuit;
+pub use pursuit::{
+    Component, FramePath, PeakRange, PeakTracker, Pursuit, PursuitParams, PursuitStats,
+    PursuitStop, SpectralFit, TrackedFrame, TrackedPeak, TrackerParams,
+};
 
 const ONE: Complex = Complex { re: 1.0, im: 0.0 };
 fn c(re: f64, im: f64) -> Complex {
@@ -699,6 +713,44 @@ impl Faft {
         }
     }
 
+    /// Unnormalized weighted values on the duration grid `lower + k*step`, with
+    /// `step = 2*pi/T/density` and every point inside `[lower, upper]`. Hann needs
+    /// neighbours at +-resolution = +-density grid steps: it shares one extended
+    /// rectangular scan instead of three sums per point.
+    fn scan_grid(
+        &self,
+        lower: f64,
+        upper: f64,
+        density: usize,
+        table: &mut Vec<Complex>,
+        stats: &mut PeakStats,
+    ) -> Result<(f64, Vec<Complex>), Error> {
+        let step = self.resolution() / density as f64;
+        let count = ((upper - lower) / step).floor() as usize + 1;
+        let (pad, rect_count) = match self.weighting {
+            Weighting::Rectangular => (0, count),
+            Weighting::Hann => (density, count + 2 * density),
+        };
+        let mut rect = buffer(rect_count)?;
+        for k in 0..rect_count {
+            let omega = lower + step * (k as f64 - pad as f64);
+            rect.push(self.rect(omega, table));
+        }
+        stats.scan_points = count;
+        stats.rect_evaluations += rect_count;
+        let mut values = buffer(count)?;
+        for k in 0..count {
+            values.push(match self.weighting {
+                Weighting::Rectangular => rect[k],
+                Weighting::Hann => sub(
+                    scale(rect[k + pad], 0.5),
+                    scale(add(rect[k], rect[k + 2 * pad]), 0.25),
+                ),
+            });
+        }
+        Ok((step, values))
+    }
+
     /// Exact `integral_window y(t) w(t) exp(-i*omega*(t-start)) dt` in amplitude *
     /// source-sample units. Any finite real omega, including above pi.
     pub fn integral(&self, omega: f64) -> Result<Complex, Error> {
@@ -835,32 +887,11 @@ impl Faft {
         let mut seeds: Vec<Seed> = Vec::new();
         let mut strongest_scan = 0.0_f64;
         if let Some(density) = params.scan_density {
-            let step = resolution / density as f64;
-            // Every scanned point lies inside [lower, upper]; brackets are clamped.
-            let count = ((params.upper - params.lower) / step).floor() as usize + 1;
-            let grid = |k: isize| (params.lower + step * k as f64).min(params.upper);
-            // Hann needs neighbours at +-resolution = +-density grid steps: share
-            // one extended rectangular scan instead of three sums per point.
-            let (pad, rect_count) = match self.weighting {
-                Weighting::Rectangular => (0, count),
-                Weighting::Hann => (density, count + 2 * density),
-            };
-            let mut rect = buffer(rect_count)?;
-            for k in 0..rect_count {
-                let omega = params.lower + step * (k as f64 - pad as f64);
-                rect.push(self.rect(omega, &mut table));
-            }
-            stats.scan_points = count;
-            stats.rect_evaluations += rect_count;
+            let (step, values) =
+                self.scan_grid(params.lower, params.upper, density, &mut table, &mut stats)?;
+            let count = values.len();
             let mut magnitude = buffer(count)?;
-            for k in 0..count {
-                let z = match self.weighting {
-                    Weighting::Rectangular => rect[k],
-                    Weighting::Hann => sub(
-                        scale(rect[k + pad], 0.5),
-                        scale(add(rect[k], rect[k + 2 * pad]), 0.25),
-                    ),
-                };
+            for z in values {
                 let m = norm(z) / self.weight_sum;
                 if !m.is_finite() {
                     return Err(Error::InvalidParameter("FAFT arithmetic overflow"));
@@ -869,32 +900,7 @@ impl Faft {
             }
             strongest_scan = magnitude.iter().copied().fold(0.0, f64::max);
             let floor = params.floor(strongest_scan);
-            for k in 0..count {
-                let left = if k > 0 {
-                    magnitude[k - 1]
-                } else {
-                    f64::NEG_INFINITY
-                };
-                let right = magnitude.get(k + 1).copied().unwrap_or(f64::NEG_INFINITY);
-                let m = magnitude[k];
-                if !(m >= floor && m > 0.0 && m >= left && m > right) {
-                    continue;
-                }
-                // Parabolic start on log magnitude: Newton then needs few steps.
-                let mut start = grid(k as isize);
-                if k > 0 && k + 1 < count && left > 0.0 && right > 0.0 {
-                    let (l, cm, r) = (left.ln(), m.ln(), right.ln());
-                    let bend = l - 2.0 * cm + r;
-                    if bend < 0.0 {
-                        start += (0.5 * (l - r) / bend * step).clamp(-step, step);
-                    }
-                }
-                seeds.push(Seed {
-                    omega: start,
-                    lo: grid(k as isize - 1).max(params.lower),
-                    hi: grid(k as isize + 1),
-                });
-            }
+            seeds = grid_seeds(&magnitude, params.lower, params.upper, step, floor)?;
         }
         if params.circle_seeds {
             let refs = self.references(resolution, params.reference_floor)?;
@@ -974,17 +980,40 @@ impl Faft {
         table: &mut Vec<Complex>,
         stats: &mut PeakStats,
     ) -> Result<Option<Peak>, Error> {
+        let mut d = [Complex::default(); 3];
+        let found = self.newton(seed, &params, stats, |omega| {
+            d = self.centered(omega, table)?;
+            Ok(power_derivatives(&d))
+        })?;
+        // Convert the centered value back to a window-start phase origin.
+        Ok(found.map(|(omega, curvature, iterations)| Peak {
+            omega,
+            value: mul(d[0], phase(-omega * self.window.len() as f64 * 0.5)),
+            curvature,
+            iterations,
+            merged: 0,
+        }))
+    }
+
+    /// Safeguarded Newton maximization of a criterion G given its first and second
+    /// omega derivatives `[G', G'']`: Newton steps when the local model is concave
+    /// and inside the bracket, which the sign of G' narrows; bisection otherwise.
+    /// Returns `(omega, G'', iterations)` for a converged interior maximum; flanks
+    /// and failures are counted and dropped. The last criterion evaluation is at
+    /// the returned omega.
+    fn newton(
+        &self,
+        seed: Seed,
+        params: &PeakParams,
+        stats: &mut PeakStats,
+        mut criterion: impl FnMut(f64) -> Result<[f64; 2], Error>,
+    ) -> Result<Option<(f64, f64, usize)>, Error> {
         let (mut lo, mut hi) = (seed.lo, seed.hi);
         let mut omega = seed.omega.clamp(lo, hi);
         let mut iterations = 0;
-        let mut d = self.centered(omega, table)?;
+        let [mut g1, mut g2] = criterion(omega)?;
         stats.derivative_evaluations += 1;
-        let slope = |d: &[Complex; 3]| 2.0 * (d[0].re * d[1].re + d[0].im * d[1].im);
-        let bend = |d: &[Complex; 3]| {
-            2.0 * (d[1].re * d[1].re + d[1].im * d[1].im + d[0].re * d[2].re + d[0].im * d[2].im)
-        };
         let converged = loop {
-            let (g1, g2) = (slope(&d), bend(&d));
             if g1 > 0.0 {
                 lo = lo.max(omega);
             } else if g1 < 0.0 {
@@ -1004,7 +1033,7 @@ impl Faft {
             }
             omega = next;
             iterations += 1;
-            d = self.centered(omega, table)?;
+            [g1, g2] = criterion(omega)?;
             stats.derivative_evaluations += 1;
         };
         stats.refined += 1;
@@ -1021,16 +1050,17 @@ impl Faft {
             stats.unconverged += 1;
             return Ok(None);
         }
-        // Convert the centered value back to a window-start phase origin.
-        let value = mul(d[0], phase(-omega * self.window.len() as f64 * 0.5));
-        Ok(Some(Peak {
-            omega,
-            value,
-            curvature: bend(&d),
-            iterations,
-            merged: 0,
-        }))
+        Ok(Some((omega, g2, iterations)))
     }
+}
+
+/// Derivatives of the spectral power G = |F|^2 from `[F, F', F'']`:
+/// G' = 2 Re(conj(F) F'), G'' = 2 (|F'|^2 + Re(conj(F) F'')).
+fn power_derivatives(d: &[Complex; 3]) -> [f64; 2] {
+    [
+        2.0 * (d[0].re * d[1].re + d[0].im * d[1].im),
+        2.0 * (d[1].re * d[1].re + d[1].im * d[1].im + d[0].re * d[2].re + d[0].im * d[2].im),
+    ]
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1038,6 +1068,48 @@ struct Seed {
     omega: f64,
     lo: f64,
     hi: f64,
+}
+
+/// Local maxima of scanned magnitudes at or above `floor`, each with a parabolic
+/// start on log magnitude (Newton then needs few steps) and a bracket of its two
+/// grid neighbours, clamped to `[lower, upper]`.
+fn grid_seeds(
+    magnitude: &[f64],
+    lower: f64,
+    upper: f64,
+    step: f64,
+    floor: f64,
+) -> Result<Vec<Seed>, Error> {
+    let count = magnitude.len();
+    let grid = |k: isize| (lower + step * k as f64).min(upper);
+    let mut seeds = Vec::new();
+    for k in 0..count {
+        let left = if k > 0 {
+            magnitude[k - 1]
+        } else {
+            f64::NEG_INFINITY
+        };
+        let right = magnitude.get(k + 1).copied().unwrap_or(f64::NEG_INFINITY);
+        let m = magnitude[k];
+        if !(m >= floor && m > 0.0 && m >= left && m > right) {
+            continue;
+        }
+        let mut start = grid(k as isize);
+        if k > 0 && k + 1 < count && left > 0.0 && right > 0.0 {
+            let (l, cm, r) = (left.ln(), m.ln(), right.ln());
+            let bend = l - 2.0 * cm + r;
+            if bend < 0.0 {
+                start += (0.5 * (l - r) / bend * step).clamp(-step, step);
+            }
+        }
+        seeds.try_reserve(1).map_err(|_| Error::OutputTooLarge)?;
+        seeds.push(Seed {
+            omega: start,
+            lo: grid(k as isize - 1).max(lower),
+            hi: grid(k as isize + 1),
+        });
+    }
+    Ok(seeds)
 }
 
 /// Grouped circle rates; `omega` is the weight-averaged rate of the group and

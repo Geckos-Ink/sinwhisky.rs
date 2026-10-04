@@ -57,6 +57,17 @@
   synthetic 1,024-sample frames, queries were 1.11–1.20× faster and peak lists
   1.15× faster than the moment form, with values within 5e-15.
 
+- FAFT peak selection (`faft::pursuit`): the window kernel and its widths,
+  measured peak ranges with shared-side flags, a joint closed-form tone fit
+  (Gram from the kernel, FAFT values as projections), residual energy with a
+  Cauchy-Schwarz certificate at every frequency, significance pruning, joint
+  Gauss-Newton frequency polishing per coupled cluster, residual-seeded pursuit
+  from one scan, and `PeakTracker` for consecutive windows (scan-free polish,
+  novelty and interval rescans, hysteresis, stable identities). On a synthetic
+  test with known partials: recall 89% to 100%, no spurious peaks, p95 height
+  error 4.7 to 0.6 dB; tracking 3.5 ms median per window against 6.4 ms for the
+  scan (`docs/experiments/faft-pursuit-synthetic-20261004.json`).
+
 ## Current focus: FAFT of determined circles
 
 1. Rotate and add in time: slide windows by updating only rotations that enter
@@ -65,10 +76,13 @@
 2. Continuous joins in circle determination. The tolerance-bounded value jumps
    between rounded circles cause the 1/z tail of the zoom difference and
    1/omega spectral tails. Test join constraints without loosening source checks.
-3. Peak-list completeness and cost. The density-2 scan misses weak maxima near
-   stronger peaks (about 5% of the adaptive list). Test certified bounds,
-   adaptive local densification, and an approximate seed pass (keeping every
-   reported value exact FAFT). Compare matched FFT/Goertzel and padded-FFT costs.
+3. Peak selection follow-up. Measure `pursue` and `PeakTracker` on the
+   Beethoven windows. The certificate `sqrt(residual/W)` is loose for broadband
+   residuals; look for tighter, still rigorous, bounds. Add chirp atoms (linear
+   frequency change) for glides and onsets, which the tone model currently spends
+   components on. Add a first-derivative-only kernel: Gauss-Newton needs `F` and
+   `F'`, and a Hann derivative evaluation (8x a value) dominates pursuit cost.
+   Keep comparing matched FFT/Goertzel and padded-FFT costs.
 4. Circle determination whose angular rates carry physical frequency. The current
    rates are geometric (aperture-dependent); circle-seeded search found only
    41-43% of the peaks and was slower than the scan. A rate is twice an inscribed
