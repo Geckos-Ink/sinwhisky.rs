@@ -3,7 +3,7 @@
 
 **Riccardo Cecchini** — riccardo.cecchini594@edu.unito.it
 
-*30 September 2026*
+*30 September 2026* - v1.1 04/10/2026
 
 ---
 
