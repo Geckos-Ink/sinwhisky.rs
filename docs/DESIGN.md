@@ -334,6 +334,32 @@ oscillators or identifying a unique inverse rotating chain. The
 compares matched padded FFTs, repeated attempts, precision/depth/zoom controls,
 and unresolved close tones without claiming an FFT speed advantage.
 
+## Web platform adaptations
+
+The reference [ports](../ports/README.md) preserve the original f64 resampler and
+periodic AFT contracts in their legacy APIs. The endpoint FAFT, joint tone fit,
+component equalizer and SWL2 correction coder were transposed from `appx/dsp`
+at `ec84edcd331af8810be9df42cf5d16f3a348d6d5` (2026-10-05), with no runtime
+dependency on that checkout. `prepareFaft` uses f32 source samples, normalized
+triplet fits and finite `[0,N-1]` support, independently of `prepareAft`'s periodic
+`[0,N]` curve. Their atoms have different layouts (20 versus 12 fields), with
+separate WebGPU hosts. Endpoint values/derivatives use the moment kernel at
+resonance; the f32 SIMD and GPU paths have explicitly measured tolerances.
+
+The streaming equalizer has whole-tone band assignment and a complementary
+residual, but uses FFT seeds, differences of values for refinement and bounded
+lookahead for the backward Butterworth pass. It is a separate adaptation, not
+sample-exact parity with the Rust hierarchical buffered divider. Its default
+WebAssembly batch equals the stream exactly; GPU batches change the fitted
+values, while the solve and residual/synthesis remain in WebAssembly.
+
+The integer SIMD SWL2 correction path exchanges version 4 streams with Rust,
+including continuation state and key starts. Frozen synthetic fixtures are
+encoded and decoded by both runtimes. It rejects gradient/anchor chunks,
+parametric streams and unsupported header flags; it does not silently omit
+layers. Encoder sample values must be integers before conversion. These ports
+do not introduce dependencies, threads or networking into the Rust core.
+
 ## Scope boundaries
 
 Fast Linear Transform (FLT) is a separate calibration/equalization idea.

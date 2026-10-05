@@ -154,8 +154,12 @@ side information and the LMS cascade after the LPC; every choice by exact coded 
 `examples/eq_audio.rs` runs it on PCM16 for `test_music.sh quick|divide|eq|extrude|compress`.
 
 Ports consumer (outside the crate): `examples/port_vectors` → `ports/fixtures/vectors.json`
-→ `ports/wasm-simd` (f64 resampler, AFT, FAFT; scalar and SIMD) → `ports/webgpu` (f32
-kernels fed by the WebAssembly port's models and atoms), each checked against the vectors.
+→ `ports/wasm-simd` (f64 resampler, periodic AFT/FAFT; scalar and SIMD) → `ports/webgpu`
+(f32 kernels fed by the WebAssembly port's models and atoms), checked against the vectors.
+The transposed `appx/dsp` path adds finite-window endpoint FAFT, joint/banded tone
+fit, streaming/batched EQ and SWL2 correction-only encode/decode; WebGPU evaluates
+batched EQ values, with fits and codec in WebAssembly. Independent quadrature,
+stream/batch tests and frozen Rust byte fixtures protect this separate preset.
 
 The library is synchronous, mono, and fully buffered. There are no threads,
 services, persistence adapters, callbacks, or networking. The optional Python
@@ -716,18 +720,28 @@ reproduce byte for byte, and a change is a reviewed change of the crate's behavi
 
 ### [ports/](ports/README.md)
 
-Reference ports outside the crate (no Cargo dependency, no effect on the library):
-`ports/wasm-simd` (AssemblyScript to WebAssembly, f64: the original-angular resampler,
-the AFT, and FAFT values/scan/derivatives/peaks on its curve, scalar paths following the
-crate's arithmetic except that FAFT keeps the moment form, and `v128` SIMD paths) and `ports/webgpu` (WGSL kernels in f32 for
-the resampler and the rectangular FAFT, geometry from the WebAssembly port, no GPU
-trigonometry). `wasm-simd/build/sinwhisky.wasm` is a checked-in build so the ports run
-without a toolchain; rebuild it (`npm run build`, AssemblyScript is the only, development,
-dependency) after editing `assembly/index.ts`. Tests: `ports/wasm-simd/test.mjs` (Node,
-against the vectors) and `ports/webgpu/test.html` (a browser with WebGPU, served by
-`ports/serve.mjs` on loopback). Not ported: uniform-x resampling, `GeometryFrame`,
-circle-rate seeds, codec frames. Measured agreement and timings live in `ports/README.md`;
-update them with any port or crate change that moves them. `node_modules/` stays ignored.
+Reference ports outside the crate (no Cargo dependency, no effect on the library).
+`ports/wasm-simd/assembly/index.ts` retains the f64 original-angular resampler,
+periodic AFT/FAFT moment kernels and their `v128` paths. Modules `faft`, `tones`,
+`eq`, `swl2` and EQ's `fft`/`db` were transposed from `appx/dsp` on 2026-10-05:
+finite-window endpoint FAFT, joint/banded fitting, streaming EQ and integer SIMD
+SWL2 correction coding. `signal-processor.mjs` wraps the new APIs; `SinWhisky`
+inherits them while retaining legacy methods and separate geometry buffers.
+`ports/webgpu/index.mjs` retains the legacy resampler/FAFT host (no GPU trig);
+`faft.mjs` adds the new endpoint WGSL, with compensated f32 sums and a batched EQ
+evaluator. New atoms use stride 20 with `FaftGpu`, legacy atoms stride 12 with
+`SinWhiskyGpu`. The new EQ preset is not the Rust hierarchical buffered divider.
+Gradient/anchor and parametric SWL2 streams are rejected, not partially decoded.
+`wasm-simd/build/sinwhisky.wasm` is checked in; rebuild (`npm run build`, only
+development dependency AssemblyScript) after editing any AssemblyScript module.
+Tests: legacy `test.mjs`, `test/*.test.mjs` for quadrature/tone fitting/EQ/SWL2 and
+coexistence, `tests/port_swl2.rs` for frozen synthetic Rust byte parity, and
+`webgpu/test.html` including `updated-test.mjs`, served by `ports/serve.mjs` on
+loopback. Fixtures in `ports/fixtures/swl2` were copied unchanged from AppX's Rust
+encoder; never regenerate them from a port. Not ported: uniform-x resampling,
+`GeometryFrame`, circle-rate seeds, pursuit/tracker and research codec frames.
+APIs, limits, agreement and timings live in `ports/README.md`; keep them current.
+`node_modules/` stays ignored.
 
 ### [README.md](README.md)
 
@@ -858,6 +872,7 @@ cargo test --offline --test spectral
 cargo test --offline --test aft
 cargo test --offline --test bands
 cargo test --offline --test layered
+cargo test --offline --test port_swl2
 cargo test --offline --lib
 cargo fmt --check
 cargo clippy --offline --all-targets -- -D warnings

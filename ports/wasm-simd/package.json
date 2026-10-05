@@ -2,7 +2,7 @@
   "name": "sinwhisky-wasm-simd",
   "version": "0.1.0",
   "private": true,
-  "description": "Reference port of sinwhisky.rs (SinWhisky resampler, AFT, FAFT) to WebAssembly with SIMD.",
+  "description": "SinWhisky reference ports: resampling, AFT, endpoint FAFT, component EQ, SWL2 correction codec with WebAssembly SIMD.",
   "type": "module",
   "exports": {
     ".": "./index.mjs",
@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "asc assembly/index.ts --target release",
-    "test": "node --test test.mjs",
+    "test": "node --test test.mjs test/*.test.mjs",
     "bench": "node bench.mjs"
   },
   "devDependencies": {

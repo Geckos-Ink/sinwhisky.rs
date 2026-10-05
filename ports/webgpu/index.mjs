@@ -161,3 +161,6 @@ export class SinWhiskyGpu {
     this.#device.destroy();
   }
 }
+
+// Endpoint FAFT and the batched equalizer evaluator (finite-window appx preset).
+export { FaftGpu, FAFT_WGSL } from './faft.mjs';

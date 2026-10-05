@@ -3,6 +3,7 @@
 // page title and window.sinwhiskyGpuReport.
 import { SinWhisky } from '../wasm-simd/index.mjs';
 import { SinWhiskyGpu } from './index.mjs';
+import { checkUpdatedPorts } from './updated-test.mjs';
 
 const status = document.getElementById('status');
 const out = document.getElementById('result');
@@ -73,6 +74,8 @@ async function main() {
   // f32 against f64 (measured on Apple Metal 3: 2.4e-7, 7.8e-7, 1.1e-6, 5.3e-7 of each output's peak).
   report.pass = largest.resample < 1e-6 && largest.rect < 1e-5 && largest.scan < 1e-5 && report.scanParity4095 < 1e-5;
   gpu.destroy();
+  report.updated = await checkUpdatedPorts(sw);
+  report.pass &&= report.updated.pass;
   return report;
 }
 

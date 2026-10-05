@@ -6,6 +6,12 @@
 - Reference ports (outside the crate): WebAssembly with SIMD and WebGPU for the
   original-angular resampler, the AFT, and FAFT on its curve, checked against
   Rust vectors (`ports/`).
+- AppX DSP transposition (2026-10-05): endpoint FAFT on the finite triplet curve,
+  banded tone fit/refinement, streaming/batched component EQ with WebGPU values,
+  and integer SIMD SWL2 correction-only encode/decode, including key segments.
+  Independent quadrature, stream/batch parity, browser GPU checks and frozen
+  Rust byte fixtures protect the supported subset. Gradient/anchor layers,
+  parametric coding and the hierarchical Rust curve preset are not ported.
 - Reusable triplet analysis with circle/line models, local coordinates, aperture,
   branches, and unwrapped angles.
 - Separate uniform-x compatibility and repaired original angular interpolation.
@@ -89,10 +95,10 @@
    angle of the fitting triangle over the side's duration. At a symmetric crest of
    a tone it matches the tone only when the aperture equals the tone's largest
    central difference (tested). Find out whether any aperture rule works away from crests.
-5. Endpoint kernel follow-up. The crate now uses it (see Implemented). Port it
-   to `ports/wasm-simd` (scalar and SIMD) and `ports/webgpu`, which still use the
-   moment form, and re-measure the Beethoven windows, whose published timings
-   predate it.
+5. Endpoint kernel follow-up. The crate and the transposed finite-window ports
+   now use it (scalar, SIMD and WebGPU; legacy periodic port APIs retain the
+   moment form). Re-measure the Beethoven windows, whose published timings
+   predate it, keeping the different curve presets explicit.
 6. Dense spectra are O(rotations × frequencies). Only consider butterfly/NUFFT-style
    interpolation with a stated error bound and measured crossover size; no FFT
    speed claim exists today.

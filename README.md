@@ -361,13 +361,18 @@ result is claimed. Next steps are in the [roadmap](ROADMAP.md).
 
 ## Ports: WebAssembly SIMD and WebGPU
 
-[ports/](ports/README.md) holds reference ports of the original-angular resampler, the
-AFT, and FAFT on the AFT's curve (values, scans, derivatives, Newton-refined peaks):
-AssemblyScript compiled to WebAssembly with scalar and SIMD (`f64x2`) paths, and WGSL
-kernels for WebGPU (f32, geometry from the WebAssembly port). They are checked against
-vectors from `cargo run --offline --example port_vectors`; the WebAssembly port agrees
-with the crate to about 4e-14 of each output's peak, the WebGPU kernels to about 1e-6.
-They are not Cargo dependencies and do not change the library.
+[ports/](ports/README.md) holds reference ports of the original-angular resampler,
+periodic AFT, and FAFT on its curve, checked against Rust vectors. It also includes
+the updated endpoint FAFT, joint tone fit, streaming/batched component equalizer
+and SWL2 version 4 correction codec transposed from `appx/dsp` (2026-10-05).
+AssemblyScript provides scalar f64, SIMD f64/f32 and integer codec kernels;
+WebGPU evaluates FAFT and the batched equalizer's values in f32. Compression and
+decompression stay in WebAssembly. The new finite triplet-curve/streaming preset
+differs from Rust's periodic AFT and hierarchical buffered equalizer; the SWL2
+subset excludes gradient/anchor layers and parametric streams. Tests cover
+independent quadrature, stream/batch agreement, GPU parity and frozen Rust codec
+bytes. See the port handbook for APIs, limits and measured deviations. The ports
+are not Cargo dependencies and do not change the library.
 
 ## Verification and listening experiments
 

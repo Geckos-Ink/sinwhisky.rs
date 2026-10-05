@@ -2,6 +2,9 @@
 // resampler, the AFT, and FAFT on the AFT's curve, each with an optional WebAssembly SIMD path.
 // Works in Node (tested with 24) and browsers. Results are copied out of the module's static buffers.
 
+import { SignalProcessor, wasmImports } from './signal-processor.mjs';
+export { SignalProcessor, SWL2_STEREO } from './signal-processor.mjs';
+
 const TAU = 2 * Math.PI;
 
 /** `PeakParams::default()` of sinwhisky.rs (scan seeds only; circle seeds are not ported). */
@@ -18,11 +21,12 @@ export const DEFAULT_PEAKS = Object.freeze({
   tolerance: 1e-12,
 });
 
-export class SinWhisky {
+export class SinWhisky extends SignalProcessor {
   #x;
   #memory;
 
   constructor(instance) {
+    super(instance);
     this.#x = instance.exports;
     this.#memory = this.#x.memory;
   }
@@ -30,7 +34,7 @@ export class SinWhisky {
   /** Instantiates the module from its bytes (a BufferSource) or an already compiled WebAssembly.Module. */
   static async instantiate(source) {
     const module = source instanceof WebAssembly.Module ? source : await WebAssembly.compile(source);
-    return new SinWhisky(await WebAssembly.instantiate(module, {}));
+    return new SinWhisky(await WebAssembly.instantiate(module, wasmImports));
   }
 
   /** Node only: the module next to this file. */
