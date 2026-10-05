@@ -11,7 +11,7 @@
 # `quick` runs all four on a short excerpt, plus a parametric stream to listen to.
 # OUTPUT_DIR must not exist and must be outside the repository. Options such as
 # --edges 250,2000, --gains-db 6,0,-12, --band 40,250, --tolerance 0,16,
-# --search fast|full, --parametric 16, --upper 2000 go to examples/eq_audio.rs.
+# --search fast|full, --cascade on|off, --parametric 16, --upper 2000 go to examples/eq_audio.rs.
 set -euo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

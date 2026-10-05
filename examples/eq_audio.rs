@@ -21,6 +21,8 @@
 //!   --search fast|full    compress: fast tries stereo modes, LPC orders and
 //!                         block sizes; full also tries gradient and anchor layers
 //!                         (each channel's tone analysis makes it slower)
+//!   --cascade on|off      compress: LMS stages after the LPC (default on; off is
+//!                         the LPC-only correction layer)
 //!   --parametric 16       compress: also a parametric stream (gradient groups
 //!                         below --upper at this precision, no correction layer),
 //!                         to listen to the "series of gradients" alone
@@ -47,6 +49,7 @@ struct Options {
     max_error: f64,
     tolerances: Vec<u32>,
     full: bool,
+    cascade: bool,
     parametric: Option<f64>,
     parametric_anchors: Option<f64>,
 }
@@ -73,6 +76,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         max_error: 16.0,
         tolerances: vec![0, 16],
         full: false,
+        cascade: true,
         parametric: None,
         parametric_anchors: None,
     };
@@ -109,6 +113,13 @@ fn parse(args: &[String]) -> Result<Options, String> {
                     "fast" => false,
                     "full" => true,
                     _ => return Err("--search is fast or full".into()),
+                }
+            }
+            "--cascade" => {
+                o.cascade = match value.as_str() {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("--cascade is on or off".into()),
                 }
             }
             "--parametric" => o.parametric = Some(one(value)?),
@@ -416,6 +427,7 @@ fn run() -> Result<(), String> {
                 tones: params,
                 gradients: o.full,
                 anchors: o.full,
+                cascade: o.cascade,
             };
             let (encoded, trials) = encode_auto(&pcm, &auto).map_err(e)?;
             let decoded = check(&encoded.bytes, &encoded.decoded)?;
@@ -441,20 +453,22 @@ fn run() -> Result<(), String> {
                 .zip(&encoded.config.channels)
                 .map(|(c, cfg)| {
                     format!(
-                        "{{{},\"gradient_bytes\":{},\"anchor_bytes\":{},\"correction_bytes\":{},\"mean_order\":{:.2},\"mean_gain\":{:.2},\"written_fraction\":{:.4}}}",
+                        "{{{},\"gradient_bytes\":{},\"anchor_bytes\":{},\"correction_bytes\":{},\"mean_order\":{:.2},\"mean_gain\":{:.2},\"mean_stages\":{:.2},\"written_fraction\":{:.4}}}",
                         describe(cfg),
                         c.gradient_bytes,
                         c.anchor_bytes,
                         c.correction_bytes,
                         c.mean_order,
                         c.mean_gain,
+                        c.mean_stages,
                         c.written as f64 / frames as f64
                     )
                 })
                 .collect();
             runs.push(format!(
-                "{{\"tolerance\":{tolerance},\"search\":\"{}\",\"bytes\":{},\"percent_of_pcm\":{:.2},\"kbps\":{:.1},\"stereo\":\"{:?}\",\"max_error\":{},\"snr_db\":{},\"trials\":{},\"seconds\":{:.3},\"channels\":[{}]}}",
+                "{{\"tolerance\":{tolerance},\"search\":\"{}\",\"cascade\":{},\"bytes\":{},\"percent_of_pcm\":{:.2},\"kbps\":{:.1},\"stereo\":\"{:?}\",\"max_error\":{},\"snr_db\":{},\"trials\":{},\"seconds\":{:.3},\"channels\":[{}]}}",
                 if o.full { "full" } else { "fast" },
+                o.cascade,
                 s.total_bytes,
                 100.0 * s.total_bytes as f64 / pcm_bytes as f64,
                 8.0 * s.total_bytes as f64 / seconds / 1000.0,

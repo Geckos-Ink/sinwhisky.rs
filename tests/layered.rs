@@ -1,6 +1,7 @@
 //! SWL2 layered coding (PAPER_EQ_COMPRESSION.md, Section 4; docs/SWL2.md): exact
-//! and bounded round trips with every layer, stereo decorrelation, the parametric
-//! mode, the automatic search and malformed streams.
+//! and bounded round trips with every layer, with and without the LMS cascade,
+//! stereo decorrelation, the parametric mode, the automatic search and malformed
+//! streams.
 use sinwhisky::bands::{ToneAnalysis, ToneParams};
 use sinwhisky::layered::{
     decode, encode, encode_auto, AnchorConfig, AutoParams, ChannelConfig, GradientConfig, Stereo,
@@ -97,10 +98,14 @@ fn every_layer_round_trips_within_its_tolerance() {
             gradients: Some(gradients()),
             anchors: Some(anchors(None)),
             block_exponent: 10,
+            cascade: false,
         },
     ];
     for tolerance in [0, 3, 16, 128] {
-        for layer in layers {
+        for layer in layers
+            .iter()
+            .flat_map(|&l| [false, true].map(|cascade| ChannelConfig { cascade, ..l }))
+        {
             let config = StreamConfig {
                 channels: vec![layer],
                 ..plain(tolerance, 1)
@@ -169,6 +174,52 @@ fn linear_prediction_codes_tones_far_below_noise() {
     assert!(t.channels[0].mean_order >= 2.0);
 }
 
+/// The LMS stages reach far behind the order-32 LPC: noise repeating with a
+/// period of 200 samples is unpredictable for the LPC and learnt by the cascade.
+#[test]
+fn cascade_learns_what_the_lpc_cannot_reach() {
+    let mut s = 5;
+    let period: Vec<f64> = (0..200).map(|_| 4000.0 * noise(&mut s)).collect();
+    let repeating: Vec<i32> = (0..32768)
+        .map(|i| (period[i % 200] + 20.0 * noise(&mut s)).round() as i32)
+        .collect();
+    let white: Vec<i32> = (0..32768)
+        .map(|_| (4000.0 * noise(&mut s)).round() as i32)
+        .collect();
+    for tolerance in [0, 16] {
+        let size = |x: &Vec<i32>, cascade: bool| {
+            let config = StreamConfig {
+                channels: vec![ChannelConfig {
+                    cascade,
+                    ..ChannelConfig::default()
+                }],
+                ..plain(tolerance, 1)
+            };
+            let encoded = encode(std::slice::from_ref(x), &[None], &config).unwrap();
+            assert_eq!(decode(&encoded.bytes).unwrap(), encoded.decoded);
+            assert!(worst(std::slice::from_ref(x), &encoded.decoded) <= tolerance);
+            encoded.stats
+        };
+        let (lpc, lms) = (size(&repeating, false), size(&repeating, true));
+        assert_eq!(lpc.channels[0].mean_stages, 0.0);
+        assert!(lms.channels[0].mean_stages > 0.0, "{lms:?}");
+        assert!(
+            lms.total_bytes * 4 < lpc.total_bytes * 3,
+            "tolerance {tolerance}: {} vs {}",
+            lms.total_bytes,
+            lpc.total_bytes
+        );
+        // On white noise the blocks can decline the stages; little is lost.
+        let (lpc, lms) = (size(&white, false), size(&white, true));
+        assert!(
+            lms.total_bytes * 100 <= lpc.total_bytes * 101,
+            "tolerance {tolerance}: {} vs {}",
+            lms.total_bytes,
+            lpc.total_bytes
+        );
+    }
+}
+
 #[test]
 fn parametric_streams_keep_only_the_layers() {
     let x = signal(12000, 8.0, 5);
@@ -207,6 +258,9 @@ fn automatic_search_never_loses_to_the_correction_layer_alone() {
             },
             gradients: true,
             anchors: true,
+            // Lossy cascade trials rerun the stages per choice (slow unoptimized);
+            // the round-trip test covers them.
+            cascade: tolerance == 0,
         };
         let (encoded, trials) = encode_auto(&channels, &params).unwrap();
         assert_eq!(decode(&encoded.bytes).unwrap(), encoded.decoded);
@@ -215,7 +269,13 @@ fn automatic_search_never_loses_to_the_correction_layer_alone() {
             let mine: Vec<_> = trials.iter().filter(|t| t.channel == c).collect();
             let alone = mine
                 .iter()
-                .find(|t| t.config == ChannelConfig::default())
+                .find(|t| {
+                    t.config
+                        == ChannelConfig {
+                            cascade: params.cascade,
+                            ..ChannelConfig::default()
+                        }
+                })
                 .unwrap();
             let chosen = mine
                 .iter()

@@ -296,9 +296,10 @@ its numerical identities are checked by `python3 tools/eq_compression_checks.py`
   frequency gradient, grouped by start and duration with a shared volume function,
   in fields whose bit widths the chunk header declares. *SinWhisky anchors* describe
   a band by samples at dynamic positions rebuilt by circles. The *correction* chunk
-  codes what remains with closed-loop LPC (order up to 32, integer arithmetic) and
-  the layers as per-block side information, within an error tolerance (0 =
-  lossless). `encode_auto` picks the stereo mode, layers, bands, precisions and
+  codes what remains with closed-loop LPC (order up to 32) followed by a cascade
+  of sign-sign LMS stages (1024, 256 and 16 taps, as in Monkey's Audio), all in
+  integer arithmetic, and the layers as per-block side information, within an
+  error tolerance (0 = lossless). `encode_auto` picks the stereo mode, layers, bands, precisions and
   block size by exact coded size. A parametric mode keeps only the layers.
 
 Real-file runs (FFmpeg and Cargo required; the output directory must be new and
@@ -318,25 +319,28 @@ streams with their decoded audio, a parametric (gradients only) version,
 
 **Benchmark.** Three 5 s stereo excerpts of one Beethoven recording (44.1 kHz,
 PCM16, 882,000 bytes each), full search with tones up to 6 kHz
-([snapshot](docs/experiments/swl2-beethoven-20261005.json), paper Section 6.2).
+([snapshot](docs/experiments/swl2-nlms-beethoven-20261005.json), paper Section 6.2;
+LPC-only [snapshot](docs/experiments/swl2-beethoven-20261005.json)).
 Every stream was decoded and checked against its tolerance.
 
 | Excerpt | FLAC lossless | SWL2 lossless | SWL2, tolerance 16 | SWL2, tolerance 128 | Parametric (no correction) |
 |---|---:|---:|---:|---:|---:|
-| 60 s | 328,541 (37.25%) | 303,109 (34.37%) | 125,756, 48.5 dB | 62,856, 30.8 dB | 158,755, 29.0 dB |
-| 180 s | 230,035 (26.08%) | 204,765 (23.22%) | 62,305, 34.0 dB | 22,580, 16.8 dB | 27,168, 14.3 dB |
-| 300 s | 415,142 (47.07%) | 380,505 (43.14%) | 181,763, 51.4 dB | 94,016, 33.5 dB | 263,143, 32.3 dB |
+| 60 s | 328,541 (37.25%) | 288,521 (32.71%) | 114,795, 48.5 dB | 55,042, 30.9 dB | 158,755, 29.0 dB |
+| 180 s | 230,035 (26.08%) | 199,805 (22.65%) | 58,616, 34.0 dB | 17,330, 17.4 dB | 27,168, 14.3 dB |
+| 300 s | 415,142 (47.07%) | 357,851 (40.57%) | 164,662, 51.4 dB | 82,888, 33.5 dB | 263,143, 32.3 dB |
 
-Bytes, with the share of PCM or the SNR. Losslessly SWL2 is 7.7–11.0% smaller
-than FLAC, and on the 60 s excerpt 19–25% smaller than the first coder (SWL1).
-The gain comes from the LPC correction layer. The automatic search kept no
+Bytes, with the share of PCM or the SNR. Losslessly SWL2 is 12.2–13.8% smaller
+than FLAC. The gain comes from the correction layer: LPC alone gave 7.7–11.0%,
+and the LMS cascade saves a further 2.4–6.0% losslessly, 5.9–9.4% at tolerance
+16 and 11.8–23.3% at tolerance 128 against LPC alone, at the same or a higher
+SNR, for about 1.6× (lossless) to 3× (lossy) the fast-search encoding time
+(`--cascade off` gives the LPC-only stream). The automatic search kept no
 gradient or anchor layer on the loud excerpts, where linear prediction already
-removes the tonal energy; on the quiet 180 s excerpt gradients made the stream
-16.9% smaller at tolerance 128 and 1.8% at 16. Parametric streams need more bytes
-than the correction layer at comparable SNR. These are three excerpts of one
-recording, timings are about 50 s per stream with the full search on one laptop,
-and no listening result is claimed. Planned next: cascaded NLMS stages in the
-correction layer ([roadmap](ROADMAP.md)).
+removes the tonal energy; on the quiet 180 s excerpt gradients paid at
+tolerances 16 and 128. Parametric streams need more bytes than the correction
+layer at comparable SNR. These are three excerpts of one recording, the full
+search takes 50–90 s per stream on one laptop (three runs in parallel), and no
+listening result is claimed. Next steps are in the [roadmap](ROADMAP.md).
 
 ## Ports: WebAssembly SIMD and WebGPU
 

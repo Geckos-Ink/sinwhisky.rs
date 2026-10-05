@@ -109,21 +109,25 @@ banded solve, selected inversion) and `fit_refined`; exact analog filtering of
 circle curves (`analog`); the component divider, equalizer and extrusion
 (`bands`); the SWL2 layered coder (`layered`, byte layout in `docs/SWL2.md`): LPC
 correction up to order 32 with the layers as per-block-gain side information,
+followed by sign-sign LMS stages of 1024, 256 and 16 taps (stages used per block),
 frequency-gradient groups with header-declared field widths, SinWhisky anchors at
 dynamic positions, a parametric mode, and `encode_auto` choosing stereo mode,
 layers, bands, precisions and block size by exact coded size. Real-file runs via
 `test_music.sh quick|divide|eq|extrude|compress [--search full]`.
 
-Measured on three 5 s excerpts (`docs/experiments/swl2-beethoven-20261005.json`):
-lossless SWL2 is 7.7-11.0% smaller than FLAC; against SWL1 on the 60 s excerpt,
-24.6% (lossless) to 19% (tolerance 128) smaller. Gradient and anchor layers do
+Measured on three 5 s excerpts (`docs/experiments/swl2-nlms-beethoven-20261005.json`):
+lossless SWL2 is 12.2-13.8% smaller than FLAC (7.7-11.0% with LPC alone,
+`docs/experiments/swl2-beethoven-20261005.json`); the LMS cascade saves 2.4-6.0%
+lossless, 5.9-9.4% at tolerance 16 and 11.8-23.3% at 128 against LPC alone, at
+1.6x to 3x the encoding time. Gradient and anchor layers do
 not pay on loud passages (LPC already removes the tonal energy) but gradients
 saved 16.9% at tolerance 128 and 1.8% at 16 on the quiet 180 s excerpt.
 Parametric streams need more bytes than the correction layer at comparable SNR.
 
-1. Stronger correction coding: cascaded adaptive filters (NLMS stages, as
-   OptimFROG/Monkey's Audio), inter-channel prediction for stereo, bias
-   cancellation, context mixing for the indices.
+1. Stronger correction coding: inter-channel prediction for stereo (a cascade
+   stage fed by the other channel), bias cancellation (a stage-0 sign
+   predictor), context mixing for the indices; faster lossy cascade trials
+   (they rerun the stages per choice) and a SIMD dot product.
 2. Lossy prediction: noise feedback/shaping and predictors fitted on the
    reconstructed (noisy) history; the gradients pay where this history is noisy.
 3. Gradient groups: breakpoint thinning, Hermite gradients (paper 4.2-4.3),

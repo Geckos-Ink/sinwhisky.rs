@@ -12,7 +12,9 @@
 //!    rebuild a low band (or all) of what the gradients left.
 //! 3. `correction` (always, last): closed-loop LPC of the source with the rounded
 //!    layer prediction as side information (a per-block gain decides how much of
-//!    it to subtract) and quantization step `2*tolerance + 1`.
+//!    it to subtract), optionally followed by a cascade of sign-sign LMS stages
+//!    (1024, 256 and 16 taps; each block chooses how many to use), and
+//!    quantization step `2*tolerance + 1`.
 //!
 //! Every decoded sample is within `tolerance` of the source (0 is lossless) and
 //! the decoder needs no source samples. Lossless stereo streams may decorrelate
@@ -38,7 +40,7 @@ use crate::Error;
 use coder::{corrupt, Bytes};
 
 const MAGIC: &[u8; 4] = b"SWL2";
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 const HEADER: usize = 16;
 const MAX_SAMPLES: usize = 1 << 28;
 /// Largest |sample| of the source: 24-bit PCM.
@@ -91,6 +93,8 @@ pub struct ChannelConfig {
     pub anchors: Option<AnchorConfig>,
     /// Correction blocks of 2^block_exponent samples, 8..=15.
     pub block_exponent: u32,
+    /// Follow the LPC with the adaptive LMS cascade (false: LPC only).
+    pub cascade: bool,
 }
 impl Default for ChannelConfig {
     fn default() -> Self {
@@ -98,6 +102,7 @@ impl Default for ChannelConfig {
             gradients: None,
             anchors: None,
             block_exponent: 12,
+            cascade: true,
         }
     }
 }
@@ -126,6 +131,8 @@ pub struct ChannelStats {
     pub mean_order: f64,
     /// Mean gain the correction blocks gave the layers' prediction (0..=1).
     pub mean_gain: f64,
+    /// Mean number of LMS cascade stages the correction blocks used (0..=3).
+    pub mean_stages: f64,
     /// RMS of the coded channel and of what the correction layer had to code.
     pub source_rms: f64,
     pub residual_rms: f64,
@@ -289,11 +296,13 @@ fn encode_channel(
         layered.then_some(&prediction[..]),
         tolerance,
         config.block_exponent,
+        config.cascade,
     );
     stats.correction_bytes = correction.payload.len();
     stats.written = correction.written;
     stats.mean_order = correction.mean_order;
     stats.mean_gain = correction.mean_gain;
+    stats.mean_stages = correction.mean_stages;
     let reconstructed = correction.reconstructed;
     chunks.push((CORRECTION, correction.payload));
     Ok(Channel {
@@ -495,6 +504,8 @@ pub struct AutoParams {
     pub gradients: bool,
     /// Try SinWhisky anchor layers.
     pub anchors: bool,
+    /// Give the correction layer the LMS cascade (false: LPC only).
+    pub cascade: bool,
 }
 
 /// One configuration the search measured.
@@ -514,7 +525,10 @@ pub fn encode_auto(
     params: &AutoParams,
 ) -> Result<(Encoded, Vec<Trial>), Error> {
     let len = validate_input(channels)?;
-    let plain = ChannelConfig::default();
+    let plain = ChannelConfig {
+        cascade: params.cascade,
+        ..ChannelConfig::default()
+    };
     let tolerance = params.tolerance;
     if tolerance > 1 << 20 {
         // Parametric streams have no exact size/quality trade-off to search.

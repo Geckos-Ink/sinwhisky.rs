@@ -113,8 +113,8 @@ code. Optional NumPy/FFmpeg research tools must not become library dependencies.
   past its end). [layered](src/layered/mod.rs) (SWL2, [spec](docs/SWL2.md))
   decode needs no source and reproduces the encoder's samples; every sample is
   within `tolerance` (0 = lossless) unless the stream is `PARAMETRIC` (no
-  correction chunk, error measured as SNR). The correction chunk is integer
-  arithmetic; gradient/anchor renders are binary64 (same-platform exactness only).
+  correction chunk, error measured as SNR). The correction chunk (LPC and the
+  LMS cascade) is integer arithmetic; gradient/anchor renders are binary64 (same-platform exactness only).
   `encode_auto` keeps a layer only if the exact coded size shrinks. Stereo
   decorrelation only when lossless. Sub-half-bin tones are DC (ill-conditioned
   sine atom otherwise). Protected by `tests/bands.rs` and `tests/layered.rs`.
@@ -145,7 +145,7 @@ T/hop T/2, |FAFT| maxima below `upper`, `fit_banded` + significance prune +
 zero-phase Butterworth, complementary) → `equalize`/`extrude`; or →
 `layered::encode_auto` (stereo mode; per channel optional gradient groups,
 optional SinWhisky anchors, then the LPC correction chunk with the layers as
-side information; every choice by exact coded size) → SWL2 bytes → `decode`.
+side information and the LMS cascade after the LPC; every choice by exact coded size) → SWL2 bytes → `decode`.
 `examples/eq_audio.rs` runs it on PCM16 for `test_music.sh quick|divide|eq|extrude|compress`.
 
 Ports consumer (outside the crate): `examples/port_vectors` → `ports/fixtures/vectors.json`
@@ -397,7 +397,11 @@ channel typed chunks, stereo transforms (FLAC's four, lossless only), `encode`
 packer. `correction.rs`: per block gain for the layer prediction (quarters) and
 LPC order (0..32, Levinson-Durbin on Tukey autocorrelation, quantization noise on
 the zero lag when lossy, 15-bit integer coefficients), chosen by trial coding;
-running-magnitude contexts. `gradients.rs`: track linking, quadratic-phase
+then (header flag, `ChannelConfig::cascade`) sign-sign LMS stages of 1024/256/16
+taps with Monkey's Audio steps, adapting every sample on the reconstructed LPC
+residual whether used or not; each block codes how many stages it adds (0..3),
+tried on the two best LPC candidates (lossless: one run gives every choice; the
+winning trial's state is kept, not recomputed); running-magnitude contexts. `gradients.rs`: track linking, quadratic-phase
 segments (frequency gradient), groups sharing start/duration/volume function,
 header-declared field widths, amplitude-class quanta, cross-faded joints.
 `anchors.rs`: greedy dynamic-gap anchors, circles through anchor triplets with
@@ -408,11 +412,13 @@ target. Bounded parsing and malformed-stream rejection are tested, not fuzzed.
 
 Reads interleaved s16le PCM, runs `divide`/`eq`/`extrude`/`compress`/`all` per
 channel, writes PCM16 WAVs, SWL2 streams (`encode_auto`, `--search fast|full`,
-optional `--parametric P [--parametric-anchors T]`) and `report.json` into a new
+`--cascade on|off`, optional `--parametric P [--parametric-anchors T]`) and
+`report.json` into a new
 directory outside the repository (checked), verifies every decode and error
 bound, and prints the aggregate report. Timings are wall-clock. Published
-aggregates: `docs/experiments/eq-compression-beethoven-20261005.json` (SWL1) and
-`docs/experiments/swl2-beethoven-20261005.json`.
+aggregates: `docs/experiments/eq-compression-beethoven-20261005.json` (SWL1),
+`docs/experiments/swl2-beethoven-20261005.json` (LPC only, `--cascade off`) and
+`docs/experiments/swl2-nlms-beethoven-20261005.json` (LMS cascade).
 
 ### [examples/pursuit_bench.rs](examples/pursuit_bench.rs)
 
@@ -936,7 +942,7 @@ inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz auto
 | Circle transforms / predictor DFT | `tests/spectral.rs` |
 | SWR1 byte decode/error/limits/Fourier/subarcs | Optional `tests/test_compression_lab.py` |
 | Banded fit = dense fit, exact filtering vs Runge-Kutta, zero-phase response, division completeness, tones whole, DC snap | `tests/bands.rs` |
-| SWL2 round trips with every layer and tolerance, stereo modes, LPC on tones vs noise, parametric mode, auto never worse than correction alone, malformed streams | `tests/layered.rs` |
+| SWL2 round trips with every layer and tolerance (cascade on and off), stereo modes, LPC on tones vs noise, cascade beyond the LPC's reach and ≤1% cost on noise, parametric mode, auto never worse than correction alone, malformed streams | `tests/layered.rs` |
 | EQ/compression paper: masked-edge leakage, two-way solve, filtered rotations, spirals, gradient tones | Optional `tools/eq_compression_checks.py` (standard library) |
 
 Known test gaps: SWR1 fuzzing/security and cross-platform rounding, other platforms,
@@ -981,17 +987,14 @@ This initial unpublished API may evolve; document every behavior change.
   coding, broader byte/error measurements and a separately validated FLT implementation.
   The equalization/compression draft ([paper](docs/PAPER_EQ_COMPRESSION.md)) has
   an implementation (banded fit, exact analog filters, divider/EQ/extrusion, SWL2
-  coder with LPC, gradient groups, SinWhisky anchors and automatic choices). On
-  three 5 s excerpts lossless SWL2 is 7.7-11.0% smaller than FLAC; gradient and
-  anchor layers paid only on a quiet passage with a tolerance (paper 6.2).
-- **To do (SWL2 correction layer):** add cascaded NLMS stages after the LPC in
-  [correction.rs](src/layered/correction.rs), as in OptimFROG/Monkey's Audio:
-  sign-sign or normalized LMS filters of decreasing length (e.g. 256, 32, 16 taps)
-  adapting sample by sample on the reconstructed history, in integer arithmetic so
-  the decoder stays exact on every platform. Keep the per-block choice by coded
-  size (signal the cascade in the block header, bump the SWL2 version and update
-  `docs/SWL2.md`), check lossless/bounded round trips in `tests/layered.rs`, and
-  remeasure the three excerpts against FLAC and the current LPC-only stream.
+  coder with LPC, an LMS cascade, gradient groups, SinWhisky anchors and automatic
+  choices). On three 5 s excerpts lossless SWL2 is 12.2-13.8% smaller than FLAC
+  (7.7-11.0% with LPC alone); the cascade saves 2.4-23.3% against LPC alone,
+  most at tolerance 128, for 1.6-3x the encoding time; gradient and anchor
+  layers paid only on a quiet passage with a tolerance (paper 6.2).
+- **SWL2 correction layer next:** inter-channel cascade stage, bias
+  cancellation, index context mixing, faster lossy cascade trials (see
+  [ROADMAP.md](ROADMAP.md)).
 
 ## Task start and handoff checklist
 

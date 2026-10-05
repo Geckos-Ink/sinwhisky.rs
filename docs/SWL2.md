@@ -17,7 +17,7 @@ Time is in source samples; frequencies in radians per sample.
 | Offset | Size | Field |
 |---:|---:|---|
 | 0 | 4 | Magic `SWL2` |
-| 4 | 1 | Version, 2 |
+| 4 | 1 | Version, 3 (version 2 had no LMS cascade; it is not decoded) |
 | 5 | 1 | Channels C, 1..=8 |
 | 6 | 1 | Stereo: 0 independent, 1 left/side, 2 side/right, 3 mid/side |
 | 7 | 1 | Reserved, written 0, ignored |
@@ -141,7 +141,7 @@ does. The last sample is `v_{M-1}`.
 
 | Size | Field |
 |---:|---|
-| 1 | Bits 0-3: block exponent b, 8..=15 (blocks of 2^b samples); bit 7: layer flag (the channel has a prediction P); bits 4-6: 0 |
+| 1 | Bits 0-3: block exponent b, 8..=15 (blocks of 2^b samples); bit 4: cascade flag (LMS stages follow the LPC); bit 7: layer flag (the channel has a prediction P); bits 5-6: 0 |
 | rest | Range-coded blocks |
 
 **Range coder** (LZMA style): 32-bit range starting at `0xFFFFFFFF`; the code
@@ -158,7 +158,8 @@ most significant bit first.
 2. Predictor order o, 6 direct bits, ≤ 32. If o > 0: shift k, 5 direct bits;
    width w, 5 direct bits, 1..=15; then o coefficients `c_i`, w direct bits each,
    signed.
-3. One index q per sample (below).
+3. If the cascade flag is set: stages used u, 2 direct bits, 0..=3.
+4. One index q per sample (below).
 
 **Index coding.** A running magnitude `m` starts at 16; the context is
 `min(23, bitlen(m >> 3))` and after each index `m = m - (m >> 4) + min(|q|, 2^24)`.
@@ -175,10 +176,36 @@ bits direct.
 `x̂[n] = pred + q·(2τ + 1)`, clamped to ±2^40. Since the encoder chooses
 `q = floor((x[n] - pred + τ) / (2τ + 1))`, every `|x̂[n] - x[n]| ≤ τ`.
 
+**LMS cascade** (cascade flag set). Call the prediction above `base`. Three
+sign-sign LMS stages follow, as in Monkey's Audio, with (taps o, shift k) =
+(1024, 15), (256, 13), (16, 11). They start from zero at the start of the
+channel and persist across blocks. Stage i keeps weights `W_j` and, for its
+past inputs `v`, steps `d` (j = 1..o is the lag; inputs and steps before the
+start of the channel are 0) and a running mean `a`, all integers. Its
+prediction is `p_i = (Σ_j W_j·v(n-j) + 2^(k-1)) >> k` (64-bit). Then
+`pred = base + p_1 + … + p_u` (saturating, clamped to ±2^40) and `x̂[n]` is
+reconstructed as above from this `pred`.
+
+After `x̂[n]`, every stage adapts, whatever u is: `r_0 = x̂[n] - base`; stage i
+takes input `r_{i-1}` and output `r_i = r_{i-1} - p_i` (saturating), and:
+
+1. if `r_i > 0` each `W_j += s_j`, if `r_i < 0` each `W_j -= s_j`, clamped to
+   ±2^20, where `s_j = d(n-j) >> h(j)` (arithmetic shift) with h(1) = 0,
+   h(2) = 1, h(3..=8) = 2 and h(j ≥ 9) = 3;
+2. the new input is `v(n) = clamp(r_{i-1}, ±(2^24 - 1))`; with `m = |v(n)|`, its
+   step is `d(n) = c·sign(v(n))`, where c is 32 if `m > 3a`, else 16 if
+   `m > floor(4a/3)`, else 8 if `m > 0`, else 0;
+3. `a += (m - a) / 16`, the quotient truncated toward zero (a starts at 0).
+
+The cascade is integer arithmetic too, so this layer decodes identically on every
+platform.
+
 ## 5. What the encoder chooses
 
 `encode_auto` measures complete coded sizes and keeps the smallest: the stereo
 code (lossless only), and per channel whether a gradients chunk pays (band, p,
 segment tolerance), whether an anchors chunk pays (low band or all, tolerance),
-and the block exponent; inside the correction chunk every block chooses g and o.
+and the block exponent; inside the correction chunk every block chooses g and o
+(the LPC candidates by exact size), then, with the cascade, u for the two best
+candidates by exact size.
 None of these choices needs to be signalled beyond the fields above.
