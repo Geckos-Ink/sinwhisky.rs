@@ -2,12 +2,15 @@
 //! Section 4). Experimental: not a stable or fuzz-validated format. The byte
 //! layout is specified in docs/SWL2.md.
 //!
-//! Each channel is a list of chunks, each predicting part of the signal from what
-//! the previous chunks left:
+//! A stream is a sequence of segments (one, or 2^S frames each). A key segment
+//! restarts every adaptive state, so decoding can start there (`decode_from`);
+//! a continuation inherits the correction layer's state. Each segment has its
+//! own stereo mode and, per channel, a list of chunks, each predicting part of
+//! the signal from what the previous chunks left:
 //!
 //! 1. `gradients` (optional): partial tracks of a frequency band as groups of
 //!    frequency-gradient segments that share start, duration and volume function;
-//!    fields are bit-packed with widths declared in the chunk header.
+//!    range coded, continuing tracks predicted from their predecessors.
 //! 2. `anchors` (optional): SinWhisky anchors at dynamic positions whose circles
 //!    rebuild a low band (or all) of what the gradients left.
 //! 3. `correction` (always, last): closed-loop LPC of the source with the rounded
@@ -20,9 +23,10 @@
 //! the decoder needs no source samples. Lossless stereo streams may decorrelate
 //! the two channels (left/side, side/right, mid/side) as FLAC does.
 //!
-//! `encode_auto` chooses everything by exact coded size: the stereo mode, whether
-//! a gradient layer pays and for which band and precision, whether anchors pay,
-//! and the block size; a layer is kept only if the complete stream gets smaller.
+//! `encode_auto` chooses everything by exact coded size, segment by segment: the
+//! stereo mode, whether a gradient layer pays and for which band and precision,
+//! whether anchors pay, and the block size; a layer is kept only if the segment
+//! gets smaller.
 //! Gradients and anchors are rendered in floating point and rounded, so
 //! decoding is exact only on the platform that encoded (the correction layer is
 //! integer); cross-platform agreement of `sin`/`cos` is untested.
@@ -40,7 +44,7 @@ use crate::Error;
 use coder::{corrupt, Bytes};
 
 const MAGIC: &[u8; 4] = b"SWL2";
-const VERSION: u8 = 3;
+const VERSION: u8 = 4;
 const HEADER: usize = 16;
 const MAX_SAMPLES: usize = 1 << 28;
 /// Largest |sample| of the source: 24-bit PCM.
@@ -86,7 +90,7 @@ impl Stereo {
     }
 }
 
-/// Layers of one coded channel.
+/// Layers of one coded channel in one segment.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChannelConfig {
     pub gradients: Option<GradientConfig>,
@@ -107,15 +111,52 @@ impl Default for ChannelConfig {
     }
 }
 
+/// One segment: whether it is a key (every adaptive state starts afresh, so
+/// decoding can start there), its stereo mode and its channels' layers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SegmentConfig {
+    pub key: bool,
+    /// Must be `Independent` unless the stream has two channels and tolerance 0.
+    pub stereo: Stereo,
+    /// One per coded channel.
+    pub channels: Vec<ChannelConfig>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StreamConfig {
     /// Largest error at every decoded sample, 0..=2^20 (0 is lossless), or
     /// `PARAMETRIC` for no correction layer.
     pub tolerance: u32,
-    /// Must be `Independent` unless the stream has two channels and tolerance 0.
-    pub stereo: Stereo,
-    /// One per coded channel.
-    pub channels: Vec<ChannelConfig>,
+    /// Segments of 2^segment_exponent frames (12..=24; the last may be
+    /// shorter), or 0 for a single segment.
+    pub segment_exponent: u32,
+    /// One per segment, in order; the first must be a key.
+    pub segments: Vec<SegmentConfig>,
+}
+impl StreamConfig {
+    /// A single key segment with these settings.
+    pub fn single(tolerance: u32, stereo: Stereo, channels: Vec<ChannelConfig>) -> Self {
+        Self {
+            tolerance,
+            segment_exponent: 0,
+            segments: vec![SegmentConfig {
+                key: true,
+                stereo,
+                channels,
+            }],
+        }
+    }
+}
+
+/// Ranges of the segments of a stream of `len` frames.
+fn segment_ranges(len: usize, exponent: u32) -> Vec<std::ops::Range<usize>> {
+    if exponent == 0 {
+        return std::iter::once(0..len).collect();
+    }
+    let size = 1usize << exponent;
+    (0..len.div_ceil(size))
+        .map(|s| s * size..((s + 1) * size).min(len))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -137,16 +178,45 @@ pub struct ChannelStats {
     pub source_rms: f64,
     pub residual_rms: f64,
 }
+impl ChannelStats {
+    /// Sums of counts and frame-weighted means over segments of `frames`.
+    fn combine(parts: &[(usize, ChannelStats)]) -> Self {
+        let total: usize = parts.iter().map(|p| p.0).sum::<usize>().max(1);
+        let mut out = ChannelStats::default();
+        let (mut source, mut residual) = (0.0, 0.0);
+        for &(frames, s) in parts {
+            let w = frames as f64 / total as f64;
+            out.gradient_bytes += s.gradient_bytes;
+            out.anchor_bytes += s.anchor_bytes;
+            out.correction_bytes += s.correction_bytes;
+            out.groups += s.groups;
+            out.members += s.members;
+            out.anchors += s.anchors;
+            out.written += s.written;
+            out.mean_order += w * s.mean_order;
+            out.mean_gain += w * s.mean_gain;
+            out.mean_stages += w * s.mean_stages;
+            source += w * s.source_rms * s.source_rms;
+            residual += w * s.residual_rms * s.residual_rms;
+        }
+        out.source_rms = source.sqrt();
+        out.residual_rms = residual.sqrt();
+        out
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StreamStats {
     pub frames: usize,
     pub header_bytes: usize,
     pub total_bytes: usize,
+    pub segments: usize,
+    pub keys: usize,
     pub max_error: u32,
     pub rms_error: f64,
     /// 10*log10(source energy / error energy); infinite when lossless.
     pub snr_db: f64,
+    /// Per coded channel, over all segments.
     pub channels: Vec<ChannelStats>,
 }
 
@@ -211,6 +281,8 @@ struct Channel {
     chunks: Vec<(u8, Vec<u8>)>,
     reconstructed: Vec<i64>,
     stats: ChannelStats,
+    /// Correction state after the segment (fresh in a parametric stream).
+    state: correction::State,
 }
 impl Channel {
     fn bytes(&self) -> usize {
@@ -241,6 +313,7 @@ fn encode_channel(
     analysis: Option<&ToneAnalysis>,
     config: &ChannelConfig,
     tolerance: u32,
+    state: correction::State,
 ) -> Result<Channel, Error> {
     if !(8..=15).contains(&config.block_exponent) {
         return Err(Error::InvalidParameter("correction block exponent"));
@@ -288,6 +361,7 @@ fn encode_channel(
             chunks,
             reconstructed: prediction,
             stats,
+            state,
         });
     }
     let layered = !chunks.is_empty();
@@ -297,6 +371,7 @@ fn encode_channel(
         tolerance,
         config.block_exponent,
         config.cascade,
+        state,
     );
     stats.correction_bytes = correction.payload.len();
     stats.written = correction.written;
@@ -309,6 +384,7 @@ fn encode_channel(
         chunks,
         reconstructed,
         stats,
+        state: correction.state,
     })
 }
 
@@ -328,41 +404,79 @@ fn validate_input(channels: &[Vec<i32>]) -> Result<usize, Error> {
     Ok(len)
 }
 
+fn validate_config(config: &StreamConfig, c: usize, len: usize) -> Result<(), Error> {
+    let ranges = segment_ranges(len, config.segment_exponent);
+    let ok = (config.tolerance <= 1 << 20 || config.tolerance == PARAMETRIC)
+        && (config.segment_exponent == 0 || (12..=24).contains(&config.segment_exponent))
+        && config.segments.len() == ranges.len()
+        && config.segments.first().is_some_and(|s| s.key)
+        && config.segments.iter().all(|s| {
+            s.channels.len() == c
+                && (s.stereo == Stereo::Independent || (c == 2 && config.tolerance == 0))
+        });
+    if ok {
+        Ok(())
+    } else {
+        Err(Error::InvalidParameter("SWL2 stream configuration"))
+    }
+}
+
+/// A coded segment: its configuration and channels.
+struct Segment {
+    config: SegmentConfig,
+    channels: Vec<Channel>,
+}
+
 fn assemble(
     channels: &[Vec<i32>],
-    config: &StreamConfig,
-    coded: Vec<Channel>,
+    config: StreamConfig,
+    coded: Vec<Segment>,
 ) -> Result<Encoded, Error> {
     let len = channels[0].len();
-    let mut bytes = Vec::with_capacity(HEADER + coded.iter().map(Channel::bytes).sum::<usize>());
+    let mut bytes = Vec::with_capacity(HEADER);
     bytes.extend_from_slice(MAGIC);
     bytes.push(VERSION);
     bytes.push(channels.len() as u8);
-    bytes.push(config.stereo.code());
+    bytes.push(config.segment_exponent as u8);
     bytes.push(0);
     bytes.extend_from_slice(&(len as u32).to_le_bytes());
     bytes.extend_from_slice(&config.tolerance.to_le_bytes());
-    for c in &coded {
-        bytes.push(c.chunks.len() as u8);
-        for (kind, payload) in &c.chunks {
-            bytes.push(*kind);
-            bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-            bytes.extend_from_slice(payload);
+    let mut decoded: Vec<Vec<i32>> = vec![Vec::with_capacity(len); channels.len()];
+    let mut parts: Vec<Vec<(usize, ChannelStats)>> = vec![Vec::new(); channels.len()];
+    let mut keys = 0;
+    let segments = coded.len();
+    for segment in coded {
+        let mut body = vec![u8::from(segment.config.key) | segment.config.stereo.code() << 1];
+        keys += usize::from(segment.config.key);
+        for c in &segment.channels {
+            body.push(c.chunks.len() as u8);
+            for (kind, payload) in &c.chunks {
+                body.push(*kind);
+                body.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+                body.extend_from_slice(payload);
+            }
+        }
+        bytes.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        bytes.extend(body);
+        let frames = segment.channels[0].reconstructed.len();
+        for (p, c) in parts.iter_mut().zip(&segment.channels) {
+            p.push((frames, c.stats));
+        }
+        let restored = inverse(
+            segment
+                .channels
+                .into_iter()
+                .map(|c| c.reconstructed)
+                .collect(),
+            segment.config.stereo,
+        );
+        for (out, c) in decoded.iter_mut().zip(restored) {
+            out.extend(
+                c.iter()
+                    .map(|&v| v.clamp(-SAMPLE_LIMIT, SAMPLE_LIMIT) as i32),
+            );
         }
     }
-    let stats_channels: Vec<ChannelStats> = coded.iter().map(|c| c.stats).collect();
-    let restored = inverse(
-        coded.into_iter().map(|c| c.reconstructed).collect(),
-        config.stereo,
-    );
-    let decoded: Vec<Vec<i32>> = restored
-        .iter()
-        .map(|c| {
-            c.iter()
-                .map(|&v| v.clamp(-SAMPLE_LIMIT, SAMPLE_LIMIT) as i32)
-                .collect()
-        })
-        .collect();
     let mut max_error = 0u64;
     let mut square = 0.0;
     let mut energy = 0.0;
@@ -380,50 +494,80 @@ fn assemble(
             frames: len,
             header_bytes: HEADER,
             total_bytes: bytes.len(),
+            segments,
+            keys,
             max_error: max_error.min(u64::from(u32::MAX)) as u32,
             rms_error: (square / total as f64).sqrt(),
             snr_db: 10.0 * (energy / square).log10(),
-            channels: stats_channels,
+            channels: parts.iter().map(|p| ChannelStats::combine(p)).collect(),
         },
         bytes,
         decoded,
-        config: config.clone(),
+        config,
     })
 }
 
-/// Encode with a fixed configuration. `analyses[c]` is the tone analysis of coded
-/// channel c (after the stereo transform), needed where its config has gradients.
+/// The frames `range` of every channel.
+fn slice(channels: &[Vec<i32>], range: &std::ops::Range<usize>) -> Vec<Vec<i32>> {
+    channels.iter().map(|c| c[range.clone()].to_vec()).collect()
+}
+
+/// Encode with a fixed configuration. `analyses[s][c]` is the tone analysis of
+/// coded channel c (after the stereo transform) in segment s, needed where its
+/// config has gradients.
 pub fn encode(
     channels: &[Vec<i32>],
-    analyses: &[Option<&ToneAnalysis>],
+    analyses: &[Vec<Option<&ToneAnalysis>>],
     config: &StreamConfig,
 ) -> Result<Encoded, Error> {
-    validate_input(channels)?;
+    let len = validate_input(channels)?;
     let c = channels.len();
-    if config.channels.len() != c
-        || analyses.len() != c
-        || (config.tolerance > 1 << 20 && config.tolerance != PARAMETRIC)
-        || (config.stereo != Stereo::Independent && (c != 2 || config.tolerance != 0))
-    {
-        return Err(Error::InvalidParameter("SWL2 stream configuration"));
+    validate_config(config, c, len)?;
+    let ranges = segment_ranges(len, config.segment_exponent);
+    if analyses.len() != ranges.len() || analyses.iter().any(|a| a.len() != c) {
+        return Err(Error::InvalidParameter("SWL2 tone analyses"));
     }
-    let coded = transform(channels, config.stereo);
-    let mut out = Vec::with_capacity(c);
-    for ((x, cfg), analysis) in coded.iter().zip(&config.channels).zip(analyses) {
-        out.push(encode_channel(x, *analysis, cfg, config.tolerance)?);
+    let mut states: Vec<correction::State> = vec![correction::State::new(); c];
+    let mut coded = Vec::with_capacity(ranges.len());
+    for ((range, segment), analyses) in ranges.iter().zip(&config.segments).zip(analyses) {
+        if segment.key {
+            states = vec![correction::State::new(); c];
+        }
+        let signals = transform(&slice(channels, range), segment.stereo);
+        let mut out = Vec::with_capacity(c);
+        for (((x, cfg), analysis), state) in signals
+            .iter()
+            .zip(&segment.channels)
+            .zip(analyses)
+            .zip(states.drain(..))
+        {
+            out.push(encode_channel(x, *analysis, cfg, config.tolerance, state)?);
+        }
+        states = out.iter().map(|ch| ch.state.clone()).collect();
+        coded.push(Segment {
+            config: segment.clone(),
+            channels: out,
+        });
     }
-    assemble(channels, config, out)
+    assemble(channels, config.clone(), coded)
 }
 
 /// Decode a stream from `encode` or `encode_auto`. Needs no source samples; every
 /// count is bounded by the header's frame count (at most 2^28) before reading.
 pub fn decode(bytes: &[u8]) -> Result<Vec<Vec<i32>>, Error> {
+    decode_from(bytes, 0)
+}
+
+/// Decode from segment `first` on, which must be a key segment: the earlier
+/// segments are skipped by their lengths, not decoded. Returns the frames from
+/// that segment's start (`first << segment_exponent`) to the end.
+pub fn decode_from(bytes: &[u8], first: usize) -> Result<Vec<Vec<i32>>, Error> {
     let mut b = Bytes::new(bytes);
     if b.take(4)? != MAGIC || b.u8()? != VERSION {
         return Err(corrupt());
     }
     let channels = b.u8()? as usize;
-    let stereo = Stereo::from_code(b.u8()?).ok_or_else(corrupt)?;
+    let exponent = u32::from(b.u8()?);
     let _reserved = b.u8()?;
     let len = b.u32()? as usize;
     let tolerance = b.u32()?;
@@ -431,67 +575,117 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Vec<i32>>, Error> {
         || len == 0
         || len > MAX_SAMPLES
         || (tolerance > 1 << 20 && tolerance != PARAMETRIC)
-        || (stereo != Stereo::Independent && (channels != 2 || tolerance != 0))
+        || (exponent != 0 && !(12..=24).contains(&exponent))
     {
         return Err(corrupt());
     }
-    let mut coded = Vec::with_capacity(channels);
+    let ranges = segment_ranges(len, exponent);
+    if first >= ranges.len() {
+        return Err(Error::InvalidParameter("SWL2 segment"));
+    }
+    for _ in 0..first {
+        let size = b.u32()? as usize;
+        b.take(size)?;
+    }
+    let mut out: Vec<Vec<i32>> = Vec::with_capacity(channels);
     for _ in 0..channels {
-        let count = b.u8()?;
-        let mut prediction = vec![0i64; len];
-        let mut corrected = None;
-        let mut seen = [false; 4];
-        for _ in 0..count {
-            let kind = b.u8()?;
-            let size = b.u32()? as usize;
-            let payload = b.take(size)?;
-            if !(1..=3).contains(&kind)
-                || seen[kind as usize]
-                || corrected.is_some()
-                || (kind == CORRECTION && tolerance == PARAMETRIC)
-            {
-                return Err(corrupt());
-            }
-            seen[kind as usize] = true;
-            match kind {
-                GRADIENTS => {
-                    let parsed = gradients::parse(payload, len)?;
-                    let mut tonal = vec![0.0; len];
-                    gradients::render(&parsed, &mut tonal);
-                    for (p, t) in prediction.iter_mut().zip(round_all(&tonal)) {
-                        *p += t;
-                    }
-                }
-                ANCHORS => {
-                    let parsed = anchors::parse(payload, len)?;
-                    for (p, v) in prediction
-                        .iter_mut()
-                        .zip(round_all(&anchors::render(&parsed, len)))
-                    {
-                        *p += v;
-                    }
-                }
-                _ => corrected = Some(correction::decode(payload, &prediction, tolerance)?),
-            }
+        out.push(crate::buffer(len - ranges[first].start)?);
+    }
+    let mut states: Vec<correction::State> = Vec::new();
+    for (index, range) in ranges.into_iter().enumerate().skip(first) {
+        let size = b.u32()? as usize;
+        let mut body = Bytes::new(b.take(size)?);
+        let flags = body.u8()?;
+        let key = flags & 1 == 1;
+        let stereo = Stereo::from_code((flags >> 1) & 3).ok_or_else(corrupt)?;
+        if flags >> 3 != 0 || (index == 0 && !key) {
+            return Err(corrupt());
         }
-        let channel = match (corrected, tolerance == PARAMETRIC) {
-            (Some(c), false) => c,
-            (None, true) => prediction,
-            _ => return Err(corrupt()),
-        };
-        coded.push(channel);
+        if index == first && !key {
+            return Err(Error::InvalidParameter("SWL2 segment is not a key"));
+        }
+        if stereo != Stereo::Independent && (channels != 2 || tolerance != 0) {
+            return Err(corrupt());
+        }
+        if key {
+            states = vec![correction::State::new(); channels];
+        }
+        let frames = range.len();
+        let mut coded = Vec::with_capacity(channels);
+        for state in states.iter_mut() {
+            coded.push(decode_channel(&mut body, frames, tolerance, state)?);
+        }
+        if body.pos != size {
+            return Err(corrupt());
+        }
+        for (o, c) in out.iter_mut().zip(inverse(coded, stereo)) {
+            o.extend(
+                c.iter()
+                    .map(|&v| v.clamp(-SAMPLE_LIMIT, SAMPLE_LIMIT) as i32),
+            );
+        }
     }
     if b.pos != bytes.len() {
         return Err(corrupt());
     }
-    Ok(inverse(coded, stereo)
-        .iter()
-        .map(|c| {
-            c.iter()
-                .map(|&v| v.clamp(-SAMPLE_LIMIT, SAMPLE_LIMIT) as i32)
-                .collect()
-        })
-        .collect())
+    Ok(out)
+}
+
+/// One channel of a segment: its chunks, rendered and corrected; `state` is
+/// the correction state before the segment and becomes the one after it.
+fn decode_channel(
+    b: &mut Bytes,
+    len: usize,
+    tolerance: u32,
+    state: &mut correction::State,
+) -> Result<Vec<i64>, Error> {
+    let count = b.u8()?;
+    let mut prediction = vec![0i64; len];
+    let mut corrected = None;
+    let mut seen = [false; 4];
+    for _ in 0..count {
+        let kind = b.u8()?;
+        let size = b.u32()? as usize;
+        let payload = b.take(size)?;
+        if !(1..=3).contains(&kind)
+            || seen[kind as usize]
+            || corrected.is_some()
+            || (kind == CORRECTION && tolerance == PARAMETRIC)
+        {
+            return Err(corrupt());
+        }
+        seen[kind as usize] = true;
+        match kind {
+            GRADIENTS => {
+                let parsed = gradients::parse(payload, len)?;
+                let mut tonal = vec![0.0; len];
+                gradients::render(&parsed, &mut tonal);
+                for (p, t) in prediction.iter_mut().zip(round_all(&tonal)) {
+                    *p += t;
+                }
+            }
+            ANCHORS => {
+                let parsed = anchors::parse(payload, len)?;
+                for (p, v) in prediction
+                    .iter_mut()
+                    .zip(round_all(&anchors::render(&parsed, len)))
+                {
+                    *p += v;
+                }
+            }
+            _ => {
+                let inherited = std::mem::replace(state, correction::State::new());
+                let (c, next) = correction::decode(payload, &prediction, tolerance, inherited)?;
+                *state = next;
+                corrected = Some(c);
+            }
+        }
+    }
+    match (corrected, tolerance == PARAMETRIC) {
+        (Some(c), false) => Ok(c),
+        (None, true) => Ok(prediction),
+        _ => Err(corrupt()),
+    }
 }
 
 /// What `encode_auto` may try.
@@ -506,27 +700,38 @@ pub struct AutoParams {
     pub anchors: bool,
     /// Give the correction layer the LMS cascade (false: LPC only).
     pub cascade: bool,
+    /// Segments of 2^segment_exponent frames (12..=24), each choosing its own
+    /// stereo mode and layers, or 0 for one segment.
+    pub segment_exponent: u32,
+    /// Every `key_interval`-th segment is a key (random access, adaptive state
+    /// restarts); 0: only the first.
+    pub key_interval: usize,
 }
 
 /// One configuration the search measured.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trial {
+    pub segment: usize,
     pub channel: usize,
     pub config: ChannelConfig,
     pub bytes: usize,
 }
 
-/// Choose the stereo mode and, per channel, the layers and their parameters that
-/// give the smallest complete stream, by exact coded size. Without any helpful
-/// layer the result is the correction layer alone, so it is never larger than
-/// that. Returns the stream and every trial.
+/// Choose, segment by segment, the stereo mode and, per channel, the layers and
+/// their parameters that give the smallest segment, by exact coded size from
+/// the state the previous segment left (greedy: a choice is never revisited).
+/// Without any helpful layer a channel is the correction layer alone, so it is
+/// never larger than that. Returns the stream and every trial.
 pub fn encode_auto(
     channels: &[Vec<i32>],
     params: &AutoParams,
 ) -> Result<(Encoded, Vec<Trial>), Error> {
     let len = validate_input(channels)?;
+    let c = channels.len();
+    // Long blocks win most often with the cascade (fewer predictor headers).
     let plain = ChannelConfig {
         cascade: params.cascade,
+        block_exponent: if params.cascade { 13 } else { 12 },
         ..ChannelConfig::default()
     };
     let tolerance = params.tolerance;
@@ -534,144 +739,189 @@ pub fn encode_auto(
         // Parametric streams have no exact size/quality trade-off to search.
         return Err(Error::InvalidParameter("SWL2 tolerance"));
     }
-    let size = |x: &[i64], a: Option<&ToneAnalysis>, cfg: &ChannelConfig| {
-        encode_channel(x, a, cfg, tolerance).map(|c| c.bytes())
-    };
-    // Stereo: the cheapest pair among the four signals, coded plainly.
-    let stereo = if channels.len() == 2 && tolerance == 0 {
-        let wide = |c: &Vec<i32>| c.iter().map(|&v| i64::from(v)).collect::<Vec<i64>>();
-        let (l, r) = (wide(&channels[0]), wide(&channels[1]));
-        let s: Vec<i64> = l.iter().zip(&r).map(|(a, b)| a - b).collect();
-        let m: Vec<i64> = l.iter().zip(&r).map(|(a, b)| (a + b) >> 1).collect();
-        let [cl, cr, cs, cm] = [&l, &r, &s, &m].map(|x| size(x, None, &plain));
-        let (cl, cr, cs, cm) = (cl?, cr?, cs?, cm?);
-        [
-            (cl + cr, Stereo::Independent),
-            (cl + cs, Stereo::LeftSide),
-            (cs + cr, Stereo::SideRight),
-            (cm + cs, Stereo::MidSide),
-        ]
-        .into_iter()
-        .min_by_key(|p| p.0)
-        .map(|p| p.1)
-        .unwrap()
-    } else {
-        Stereo::Independent
-    };
-    let coded = transform(channels, stereo);
+    if params.segment_exponent != 0 && !(12..=24).contains(&params.segment_exponent) {
+        return Err(Error::InvalidParameter("SWL2 segment exponent"));
+    }
+    let ranges = segment_ranges(len, params.segment_exponent);
     let mut trials = Vec::new();
-    let mut analyses = Vec::with_capacity(coded.len());
-    let mut configs = Vec::with_capacity(coded.len());
+    let mut coded: Vec<Segment> = Vec::with_capacity(ranges.len());
+    let mut states: Vec<correction::State> = vec![correction::State::new(); c];
     let upper = params.tones.upper;
     let base = (tolerance as f64).max(2.0);
-    for (index, x) in coded.iter().enumerate() {
-        let analysis = if params.gradients {
-            let samples: Vec<f64> = x.iter().map(|&v| v as f64).collect();
-            Some(ToneAnalysis::new(&samples, params.tones)?)
-        } else {
-            None
+    for (index, range) in ranges.iter().enumerate() {
+        let key = index == 0 || (params.key_interval > 0 && index % params.key_interval == 0);
+        if key {
+            states = vec![correction::State::new(); c];
+        }
+        let source = slice(channels, range);
+        let plainly = |x: &[i64], state: &correction::State| {
+            encode_channel(x, None, &plain, tolerance, state.clone())
         };
-        let mut best = (size(x, None, &plain)?, plain);
-        trials.push(Trial {
-            channel: index,
-            config: plain,
-            bytes: best.0,
-        });
-        let mut consider =
-            |cfg: ChannelConfig, best: &mut (usize, ChannelConfig)| -> Result<(), Error> {
-                let bytes = size(x, analysis.as_ref(), &cfg)?;
+        // Stereo: the cheapest pair among the four signals, coded plainly,
+        // each channel from its own inherited state.
+        let (stereo, mut firsts) = if c == 2 && tolerance == 0 {
+            let wide = |c: &Vec<i32>| c.iter().map(|&v| i64::from(v)).collect::<Vec<i64>>();
+            let (l, r) = (wide(&source[0]), wide(&source[1]));
+            let s: Vec<i64> = l.iter().zip(&r).map(|(a, b)| a - b).collect();
+            let m: Vec<i64> = l.iter().zip(&r).map(|(a, b)| (a + b) >> 1).collect();
+            let (l0, r1) = (plainly(&l, &states[0])?, plainly(&r, &states[1])?);
+            let (s0, s1) = (plainly(&s, &states[0])?, plainly(&s, &states[1])?);
+            let m0 = plainly(&m, &states[0])?;
+            let options = [
+                (l0.bytes() + r1.bytes(), Stereo::Independent),
+                (l0.bytes() + s1.bytes(), Stereo::LeftSide),
+                (s0.bytes() + r1.bytes(), Stereo::SideRight),
+                (m0.bytes() + s1.bytes(), Stereo::MidSide),
+            ];
+            let stereo = options.iter().min_by_key(|p| p.0).unwrap().1;
+            let pair = match stereo {
+                Stereo::Independent => [l0, r1],
+                Stereo::LeftSide => [l0, s1],
+                Stereo::SideRight => [s0, r1],
+                Stereo::MidSide => [m0, s1],
+            };
+            (stereo, pair.into_iter().map(Some).collect::<Vec<_>>())
+        } else {
+            (Stereo::Independent, Vec::new())
+        };
+        firsts.resize_with(c, || None);
+        let signals = transform(&source, stereo);
+        let mut configs = Vec::with_capacity(c);
+        let mut out = Vec::with_capacity(c);
+        for (channel, (x, first)) in signals.iter().zip(firsts).enumerate() {
+            let state = &states[channel];
+            let analysis = if params.gradients {
+                let samples: Vec<f64> = x.iter().map(|&v| v as f64).collect();
+                Some(ToneAnalysis::new(&samples, params.tones)?)
+            } else {
+                None
+            };
+            let first = match first {
+                Some(f) => f,
+                None => plainly(x, state)?,
+            };
+            trials.push(Trial {
+                segment: index,
+                channel,
+                config: plain,
+                bytes: first.bytes(),
+            });
+            let mut best = (first, plain);
+            let mut consider = |cfg: ChannelConfig,
+                                best: &mut (Channel, ChannelConfig)|
+             -> Result<(), Error> {
+                let coded = encode_channel(x, analysis.as_ref(), &cfg, tolerance, state.clone())?;
                 trials.push(Trial {
-                    channel: index,
+                    segment: index,
+                    channel,
                     config: cfg,
-                    bytes,
+                    bytes: coded.bytes(),
                 });
-                if bytes < best.0 {
-                    *best = (bytes, cfg);
+                if coded.bytes() < best.0.bytes() {
+                    *best = (coded, cfg);
                 }
                 Ok(())
             };
-        if analysis.is_some() {
-            let gradient = |lower: f64, top: f64, precision: f64, segment: f64| GradientConfig {
-                lower,
-                upper: top,
-                precision,
-                segment_tolerance: segment,
-                min_amplitude: 0.0,
-                max_jump_bins: 1.0,
-            };
-            for (lo, hi) in [
-                (0.0, 0.25),
-                (0.0, 0.5),
-                (0.0, 1.0),
-                (0.0625, 0.5),
-                (0.0625, 1.0),
-                (0.25, 1.0),
-            ] {
-                for precision in [base, 4.0 * base] {
-                    let cfg = ChannelConfig {
-                        gradients: Some(gradient(
-                            lo * upper,
-                            hi * upper,
-                            precision,
-                            2.0 * precision,
-                        )),
-                        ..plain
+            if analysis.is_some() {
+                let gradient =
+                    |lower: f64, top: f64, precision: f64, segment: f64| GradientConfig {
+                        lower,
+                        upper: top,
+                        precision,
+                        segment_tolerance: segment,
+                        min_amplitude: 0.0,
+                        max_jump_bins: 1.0,
                     };
-                    consider(cfg, &mut best)?;
+                for (lo, hi) in [
+                    (0.0, 0.25),
+                    (0.0, 0.5),
+                    (0.0, 1.0),
+                    (0.0625, 0.5),
+                    (0.0625, 1.0),
+                    (0.25, 1.0),
+                ] {
+                    for precision in [base, 4.0 * base] {
+                        let cfg = ChannelConfig {
+                            gradients: Some(gradient(
+                                lo * upper,
+                                hi * upper,
+                                precision,
+                                2.0 * precision,
+                            )),
+                            ..plain
+                        };
+                        consider(cfg, &mut best)?;
+                    }
+                }
+                // Refine precision and segmentation around the best band.
+                if let Some(g) = best.1.gradients {
+                    for (p, s) in [(0.5, 1.0), (2.0, 1.0), (1.0, 0.5), (1.0, 4.0)] {
+                        let cfg = ChannelConfig {
+                            gradients: Some(gradient(
+                                g.lower,
+                                g.upper,
+                                (g.precision * p).max(1e-3),
+                                g.segment_tolerance * p * s,
+                            )),
+                            ..best.1
+                        };
+                        consider(cfg, &mut best)?;
+                    }
                 }
             }
-            // Refine precision and segmentation around the best band.
-            if let Some(g) = best.1.gradients {
-                for (p, s) in [(0.5, 1.0), (2.0, 1.0), (1.0, 0.5), (1.0, 4.0)] {
+            if params.anchors {
+                let start = best.1;
+                for cutoff in [Some(0.02), Some(0.06), None] {
+                    for scale in [1.0, 4.0] {
+                        let tol = base * scale;
+                        let cfg = ChannelConfig {
+                            anchors: Some(AnchorConfig {
+                                cutoff,
+                                tolerance: tol,
+                                step: (0.5 * tol).max(1e-3),
+                                max_gap: 1024,
+                            }),
+                            ..start
+                        };
+                        consider(cfg, &mut best)?;
+                    }
+                }
+            }
+            // Block size: one step either way, then onwards while it pays.
+            let centre = best.1.block_exponent;
+            for direction in [-1i32, 1] {
+                let mut exponent = centre as i32 + direction;
+                while (8..=15).contains(&exponent) {
+                    let before = best.1.block_exponent;
                     let cfg = ChannelConfig {
-                        gradients: Some(gradient(
-                            g.lower,
-                            g.upper,
-                            (g.precision * p).max(1e-3),
-                            g.segment_tolerance * p * s,
-                        )),
+                        block_exponent: exponent as u32,
                         ..best.1
                     };
                     consider(cfg, &mut best)?;
+                    if best.1.block_exponent == before {
+                        break;
+                    }
+                    exponent += direction;
                 }
             }
+            configs.push(best.1);
+            out.push(best.0);
         }
-        if params.anchors {
-            let start = best.1;
-            for cutoff in [Some(0.02), Some(0.06), None] {
-                for scale in [1.0, 4.0] {
-                    let tol = base * scale;
-                    let cfg = ChannelConfig {
-                        anchors: Some(AnchorConfig {
-                            cutoff,
-                            tolerance: tol,
-                            step: (0.5 * tol).max(1e-3),
-                            max_gap: 1024,
-                        }),
-                        ..start
-                    };
-                    consider(cfg, &mut best)?;
-                }
-            }
-        }
-        for exponent in [11, 13] {
-            let cfg = ChannelConfig {
-                block_exponent: exponent,
-                ..best.1
-            };
-            consider(cfg, &mut best)?;
-        }
-        analyses.push(analysis);
-        configs.push(best.1);
+        states = out.iter().map(|ch| ch.state.clone()).collect();
+        coded.push(Segment {
+            config: SegmentConfig {
+                key,
+                stereo,
+                channels: configs,
+            },
+            channels: out,
+        });
     }
     let config = StreamConfig {
         tolerance,
-        stereo,
-        channels: configs,
+        segment_exponent: params.segment_exponent,
+        segments: coded.iter().map(|s| s.config.clone()).collect(),
     };
-    let refs: Vec<Option<&ToneAnalysis>> = analyses.iter().map(Option::as_ref).collect();
-    let encoded = encode(channels, &refs, &config)?;
-    debug_assert_eq!(encoded.decoded.len(), channels.len());
-    let _ = len;
+    let encoded = assemble(channels, config, coded)?;
     Ok((encoded, trials))
 }

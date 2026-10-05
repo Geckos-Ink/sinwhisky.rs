@@ -27,6 +27,11 @@
 //!                         below --upper at this precision, no correction layer),
 //!                         to listen to the "series of gradients" alone
 //!   --parametric-anchors 256   add SinWhisky anchors (this tolerance) to it
+//!   --segment 16          compress: segments of 2^16 frames (12..=24), each
+//!                         choosing its own stereo mode and layers (default 0:
+//!                         one segment)
+//!   --key 4               compress: every 4th segment is a key frame, where
+//!                         decoding can start (default 0: only the first)
 //! Timings are wall-clock on this machine and are reported, not asserted.
 use sinwhisky::bands::{divide, equalize, extrude, BandSplit, Crossover, ToneAnalysis, ToneParams};
 use sinwhisky::layered::{
@@ -52,6 +57,8 @@ struct Options {
     cascade: bool,
     parametric: Option<f64>,
     parametric_anchors: Option<f64>,
+    segment: u32,
+    key: usize,
 }
 
 fn list<T: std::str::FromStr>(text: &str) -> Result<Vec<T>, String> {
@@ -79,6 +86,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
         cascade: true,
         parametric: None,
         parametric_anchors: None,
+        segment: 0,
+        key: 0,
     };
     let mut i = 0;
     while i < args.len() {
@@ -124,11 +133,30 @@ fn parse(args: &[String]) -> Result<Options, String> {
             }
             "--parametric" => o.parametric = Some(one(value)?),
             "--parametric-anchors" => o.parametric_anchors = Some(one(value)?),
+            "--segment" => o.segment = value.parse().map_err(|_| "bad --segment")?,
+            "--key" => o.key = value.parse().map_err(|_| "bad --key")?,
             other => return Err(format!("unknown option {other}")),
         }
         i += 2;
     }
     Ok(o)
+}
+
+/// The stereo mode of a single segment, or one letter per segment.
+fn stereo_modes(config: &StreamConfig) -> String {
+    if let [only] = &config.segments[..] {
+        return format!("{:?}", only.stereo);
+    }
+    config
+        .segments
+        .iter()
+        .map(|s| match s.stereo {
+            Stereo::Independent => 'I',
+            Stereo::LeftSide => 'L',
+            Stereo::SideRight => 'R',
+            Stereo::MidSide => 'M',
+        })
+        .collect()
 }
 
 fn write_wav(path: &Path, channels: &[Vec<f64>], rate: u32) -> Result<usize, String> {
@@ -428,6 +456,8 @@ fn run() -> Result<(), String> {
                 gradients: o.full,
                 anchors: o.full,
                 cascade: o.cascade,
+                segment_exponent: o.segment,
+                key_interval: o.key,
             };
             let (encoded, trials) = encode_auto(&pcm, &auto).map_err(e)?;
             let decoded = check(&encoded.bytes, &encoded.decoded)?;
@@ -450,7 +480,7 @@ fn run() -> Result<(), String> {
             let per_channel: Vec<String> = s
                 .channels
                 .iter()
-                .zip(&encoded.config.channels)
+                .zip(&encoded.config.segments[0].channels)
                 .map(|(c, cfg)| {
                     format!(
                         "{{{},\"gradient_bytes\":{},\"anchor_bytes\":{},\"correction_bytes\":{},\"mean_order\":{:.2},\"mean_gain\":{:.2},\"mean_stages\":{:.2},\"written_fraction\":{:.4}}}",
@@ -466,13 +496,15 @@ fn run() -> Result<(), String> {
                 })
                 .collect();
             runs.push(format!(
-                "{{\"tolerance\":{tolerance},\"search\":\"{}\",\"cascade\":{},\"bytes\":{},\"percent_of_pcm\":{:.2},\"kbps\":{:.1},\"stereo\":\"{:?}\",\"max_error\":{},\"snr_db\":{},\"trials\":{},\"seconds\":{:.3},\"channels\":[{}]}}",
+                "{{\"tolerance\":{tolerance},\"search\":\"{}\",\"cascade\":{},\"bytes\":{},\"percent_of_pcm\":{:.2},\"kbps\":{:.1},\"segments\":{},\"keys\":{},\"stereo\":\"{}\",\"max_error\":{},\"snr_db\":{},\"trials\":{},\"seconds\":{:.3},\"channels\":[{}]}}",
                 if o.full { "full" } else { "fast" },
                 o.cascade,
                 s.total_bytes,
                 100.0 * s.total_bytes as f64 / pcm_bytes as f64,
                 8.0 * s.total_bytes as f64 / seconds / 1000.0,
-                encoded.config.stereo,
+                s.segments,
+                s.keys,
+                stereo_modes(&encoded.config),
                 s.max_error,
                 json_number(s.snr_db),
                 trials.len(),
@@ -499,13 +531,10 @@ fn run() -> Result<(), String> {
                 }),
                 ..ChannelConfig::default()
             };
-            let config = StreamConfig {
-                tolerance: PARAMETRIC,
-                stereo: Stereo::Independent,
-                channels: vec![channel; channels],
-            };
+            let config =
+                StreamConfig::single(PARAMETRIC, Stereo::Independent, vec![channel; channels]);
             let refs: Vec<_> = analyses.iter().map(Some).collect();
-            let encoded = encode(&pcm, &refs, &config).map_err(e)?;
+            let encoded = encode(&pcm, &[refs], &config).map_err(e)?;
             let decoded = check(&encoded.bytes, &encoded.decoded)?;
             std::fs::write(output.join("parametric.swl2"), &encoded.bytes)
                 .map_err(|e| e.to_string())?;

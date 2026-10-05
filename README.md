@@ -291,16 +291,22 @@ its numerical identities are checked by `python3 tools/eq_compression_checks.py`
   `divide` assigns each tone whole to a band and splits the residual with
   complementary zero-phase filters, so the bands add back to the source exactly;
   `equalize` applies band gains; `extrude` isolates one band and its remainder.
-- `layered` (SWL2, [byte layout](docs/SWL2.md)): a channel is a list of chunks.
-  *Frequency-gradient groups* describe partials as segments with a constant
-  frequency gradient, grouped by start and duration with a shared volume function,
-  in fields whose bit widths the chunk header declares. *SinWhisky anchors* describe
-  a band by samples at dynamic positions rebuilt by circles. The *correction* chunk
-  codes what remains with closed-loop LPC (order up to 32) followed by a cascade
-  of sign-sign LMS stages (1024, 256 and 16 taps, as in Monkey's Audio), all in
-  integer arithmetic, and the layers as per-block side information, within an
-  error tolerance (0 = lossless). `encode_auto` picks the stereo mode, layers, bands, precisions and
-  block size by exact coded size. A parametric mode keeps only the layers.
+- `layered` (SWL2, [byte layout](docs/SWL2.md)): a stream is a sequence of
+  segments; a *key* segment restarts every adaptive state, so decoding
+  (`decode_from`) and streaming can start there, and a *continuation* inherits the
+  correction layer's state. Each segment chooses its own stereo mode and, per
+  channel, a list of chunks. *Frequency-gradient groups* describe partials as
+  segments with a constant frequency gradient, grouped by start and duration with
+  a shared volume function, range coded; a segment that continues a track codes
+  only its residuals from where its predecessor ended. *SinWhisky anchors*
+  describe a band by samples at dynamic positions rebuilt by circles. The
+  *correction* chunk codes what remains with closed-loop LPC (order up to 32,
+  coefficients repeated or sent as differences when that is cheaper) followed by
+  a cascade of sign-sign LMS stages (1024, 256 and 16 taps, as in Monkey's
+  Audio), all in integer arithmetic, and the layers as per-block side
+  information, within an error tolerance (0 = lossless). `encode_auto` picks the
+  stereo mode, layers, bands, precisions and block size by exact coded size,
+  segment by segment. A parametric mode keeps only the layers.
 
 Real-file runs (FFmpeg and Cargo required; the output directory must be new and
 outside the repository):
@@ -310,6 +316,7 @@ outside the repository):
 ./test_music.sh eq /path/to/music.mp3 /tmp/eq-bass --edges 250,2000 --gains-db 6,0,-12
 ./test_music.sh extrude /path/to/music.mp3 /tmp/eq-bass-only --band 40,250
 ./test_music.sh compress /path/to/music.mp3 /tmp/eq-full --search full --upper 6000 --tolerance 0,16,128
+./test_music.sh compress /path/to/music.mp3 /tmp/eq-stream --segment 16 --key 1
 ```
 
 `quick` (about 22 s) decodes 5 s from 60 s and writes the bands, tonal and
@@ -318,29 +325,39 @@ streams with their decoded audio, a parametric (gradients only) version,
 `source.wav`, a FLAC control and `report.json`.
 
 **Benchmark.** Three 5 s stereo excerpts of one Beethoven recording (44.1 kHz,
-PCM16, 882,000 bytes each), full search with tones up to 6 kHz
-([snapshot](docs/experiments/swl2-nlms-beethoven-20261005.json), paper Section 6.2;
-LPC-only [snapshot](docs/experiments/swl2-beethoven-20261005.json)).
+PCM16, 882,000 bytes each), full search with tones up to 6 kHz, stream version 4
+([snapshot](docs/experiments/swl2-v4-beethoven-20261005.json), paper Section 6.2;
+version 3 [snapshot](docs/experiments/swl2-nlms-beethoven-20261005.json), LPC-only
+[snapshot](docs/experiments/swl2-beethoven-20261005.json)).
 Every stream was decoded and checked against its tolerance.
 
 | Excerpt | FLAC lossless | SWL2 lossless | SWL2, tolerance 16 | SWL2, tolerance 128 | Parametric (no correction) |
 |---|---:|---:|---:|---:|---:|
-| 60 s | 328,541 (37.25%) | 288,521 (32.71%) | 114,795, 48.5 dB | 55,042, 30.9 dB | 158,755, 29.0 dB |
-| 180 s | 230,035 (26.08%) | 199,805 (22.65%) | 58,616, 34.0 dB | 17,330, 17.4 dB | 27,168, 14.3 dB |
-| 300 s | 415,142 (47.07%) | 357,851 (40.57%) | 164,662, 51.4 dB | 82,888, 33.5 dB | 263,143, 32.3 dB |
+| 60 s | 328,541 (37.25%) | 284,742 (32.28%) | 112,225, 48.5 dB | 52,773, 30.9 dB | 91,827, 29.0 dB |
+| 180 s | 230,035 (26.08%) | 195,968 (22.22%) | 57,133, 34.0 dB | 15,821, 17.4 dB | 18,891, 14.3 dB |
+| 300 s | 415,142 (47.07%) | 352,453 (39.96%) | 161,977, 51.4 dB | 81,807, 33.5 dB | 169,949, 32.3 dB |
 
-Bytes, with the share of PCM or the SNR. Losslessly SWL2 is 12.2–13.8% smaller
+Bytes, with the share of PCM or the SNR. Losslessly SWL2 is 13.3–15.1% smaller
 than FLAC. The gain comes from the correction layer: LPC alone gave 7.7–11.0%,
-and the LMS cascade saves a further 2.4–6.0% losslessly, 5.9–9.4% at tolerance
-16 and 11.8–23.3% at tolerance 128 against LPC alone, at the same or a higher
-SNR, for about 1.6× (lossless) to 3× (lossy) the fast-search encoding time
-(`--cascade off` gives the LPC-only stream). The automatic search kept no
-gradient or anchor layer on the loud excerpts, where linear prediction already
-removes the tonal energy; on the quiet 180 s excerpt gradients paid at
-tolerances 16 and 128. Parametric streams need more bytes than the correction
-layer at comparable SNR. These are three excerpts of one recording, the full
-search takes 50–90 s per stream on one laptop (three runs in parallel), and no
-listening result is claimed. Next steps are in the [roadmap](ROADMAP.md).
+the LMS cascade 12.2–13.8%, and version 4 saves a further 1.3–1.9% losslessly,
+1.6–2.5% at tolerance 16 and 1.3–8.7% at tolerance 128 at the same SNR, mainly
+because each block now tries the stages on a short LPC too: the chosen orders
+fell from about 20 to 2–8. The parametric streams (same parameters, same SNR)
+are 30–42% smaller, from range coding the gradient groups and anchors and
+predicting each continuing track from where it ended. The automatic search kept
+no gradient or anchor layer on the loud excerpts, where linear prediction
+already removes the tonal energy; on the quiet 180 s excerpt gradients paid at
+tolerance 128. Parametric streams still need more bytes than the correction
+layer at comparable SNR.
+
+For streaming or seeking, `--segment 16 --key 1` makes every 2^16 frames
+(1.5 s) a key frame where decoding can start: on the fast search this cost
+0.3–0.8% losslessly (still 12.9–14.5% below FLAC), 0.5–1.2% at tolerance 16 and
+1.2–5.0% at tolerance 128, mostly the 1024-tap stage relearning. Segments
+without keys (`--segment 16`) cost 0–0.2%, except 1.5% on the quiet excerpt at
+tolerance 128. These are three excerpts of one recording, the full search takes
+70–120 s per stream on one laptop (three runs in parallel), and no listening
+result is claimed. Next steps are in the [roadmap](ROADMAP.md).
 
 ## Ports: WebAssembly SIMD and WebGPU
 

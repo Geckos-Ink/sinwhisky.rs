@@ -1,11 +1,11 @@
 //! SWL2 layered coding (PAPER_EQ_COMPRESSION.md, Section 4; docs/SWL2.md): exact
 //! and bounded round trips with every layer, with and without the LMS cascade,
-//! stereo decorrelation, the parametric mode, the automatic search and malformed
-//! streams.
+//! stereo decorrelation, the parametric mode, segments with key and continuation
+//! frames, random access, the automatic search and malformed streams.
 use sinwhisky::bands::{ToneAnalysis, ToneParams};
 use sinwhisky::layered::{
-    decode, encode, encode_auto, AnchorConfig, AutoParams, ChannelConfig, GradientConfig, Stereo,
-    StreamConfig, PARAMETRIC,
+    decode, decode_from, encode, encode_auto, AnchorConfig, AutoParams, ChannelConfig,
+    GradientConfig, SegmentConfig, Stereo, StreamConfig, PARAMETRIC,
 };
 
 fn noise(seed: &mut u64) -> f64 {
@@ -73,11 +73,15 @@ fn worst(a: &[Vec<i32>], b: &[Vec<i32>]) -> u32 {
 }
 
 fn plain(tolerance: u32, channels: usize) -> StreamConfig {
-    StreamConfig {
+    StreamConfig::single(
         tolerance,
-        stereo: Stereo::Independent,
-        channels: vec![ChannelConfig::default(); channels],
-    }
+        Stereo::Independent,
+        vec![ChannelConfig::default(); channels],
+    )
+}
+
+fn single(tolerance: u32, channel: ChannelConfig) -> StreamConfig {
+    StreamConfig::single(tolerance, Stereo::Independent, vec![channel])
 }
 
 #[test]
@@ -106,11 +110,8 @@ fn every_layer_round_trips_within_its_tolerance() {
             .iter()
             .flat_map(|&l| [false, true].map(|cascade| ChannelConfig { cascade, ..l }))
         {
-            let config = StreamConfig {
-                channels: vec![layer],
-                ..plain(tolerance, 1)
-            };
-            let encoded = encode(std::slice::from_ref(&x), &[Some(&a)], &config).unwrap();
+            let config = single(tolerance, layer);
+            let encoded = encode(std::slice::from_ref(&x), &[vec![Some(&a)]], &config).unwrap();
             let decoded = decode(&encoded.bytes).unwrap();
             assert_eq!(decoded, encoded.decoded, "decoder reproduces the encoder");
             let error = worst(std::slice::from_ref(&x), &decoded);
@@ -142,18 +143,12 @@ fn stereo_decorrelation_is_lossless_and_rejected_when_lossy() {
         Stereo::SideRight,
         Stereo::MidSide,
     ] {
-        let config = StreamConfig {
-            stereo,
-            ..plain(0, 2)
-        };
-        let encoded = encode(&channels, &[None, None], &config).unwrap();
+        let config = StreamConfig::single(0, stereo, vec![ChannelConfig::default(); 2]);
+        let encoded = encode(&channels, &[vec![None, None]], &config).unwrap();
         assert_eq!(decode(&encoded.bytes).unwrap(), channels, "{stereo:?}");
     }
-    let lossy = StreamConfig {
-        stereo: Stereo::MidSide,
-        ..plain(4, 2)
-    };
-    assert!(encode(&channels, &[None, None], &lossy).is_err());
+    let lossy = StreamConfig::single(4, Stereo::MidSide, vec![ChannelConfig::default(); 2]);
+    assert!(encode(&channels, &[vec![None, None]], &lossy).is_err());
 }
 
 #[test]
@@ -164,7 +159,7 @@ fn linear_prediction_codes_tones_far_below_noise() {
         .map(|_| (6000.0 * noise(&mut s)).round() as i32)
         .collect();
     let size = |x: &Vec<i32>| {
-        encode(std::slice::from_ref(x), &[None], &plain(0, 1))
+        encode(std::slice::from_ref(x), &[vec![None]], &plain(0, 1))
             .unwrap()
             .stats
     };
@@ -188,14 +183,14 @@ fn cascade_learns_what_the_lpc_cannot_reach() {
         .collect();
     for tolerance in [0, 16] {
         let size = |x: &Vec<i32>, cascade: bool| {
-            let config = StreamConfig {
-                channels: vec![ChannelConfig {
+            let config = single(
+                tolerance,
+                ChannelConfig {
                     cascade,
                     ..ChannelConfig::default()
-                }],
-                ..plain(tolerance, 1)
-            };
-            let encoded = encode(std::slice::from_ref(x), &[None], &config).unwrap();
+                },
+            );
+            let encoded = encode(std::slice::from_ref(x), &[vec![None]], &config).unwrap();
             assert_eq!(decode(&encoded.bytes).unwrap(), encoded.decoded);
             assert!(worst(std::slice::from_ref(x), &encoded.decoded) <= tolerance);
             encoded.stats
@@ -224,21 +219,21 @@ fn cascade_learns_what_the_lpc_cannot_reach() {
 fn parametric_streams_keep_only_the_layers() {
     let x = signal(12000, 8.0, 5);
     let a = analysis(&x);
-    let config = StreamConfig {
-        channels: vec![ChannelConfig {
+    let config = single(
+        PARAMETRIC,
+        ChannelConfig {
             gradients: Some(gradients()),
             ..ChannelConfig::default()
-        }],
-        ..plain(PARAMETRIC, 1)
-    };
-    let encoded = encode(std::slice::from_ref(&x), &[Some(&a)], &config).unwrap();
+        },
+    );
+    let encoded = encode(std::slice::from_ref(&x), &[vec![Some(&a)]], &config).unwrap();
     assert_eq!(decode(&encoded.bytes).unwrap(), encoded.decoded);
     assert_eq!(encoded.stats.channels[0].correction_bytes, 0);
     // Two tones and weak noise: the gradients alone carry most of the signal.
     assert!(encoded.stats.snr_db > 20.0, "{:?}", encoded.stats);
     assert!(encode(
         std::slice::from_ref(&x),
-        &[Some(&a)],
+        &[vec![Some(&a)]],
         &plain(PARAMETRIC - 1, 1)
     )
     .is_err());
@@ -261,31 +256,27 @@ fn automatic_search_never_loses_to_the_correction_layer_alone() {
             // Lossy cascade trials rerun the stages per choice (slow unoptimized);
             // the round-trip test covers them.
             cascade: tolerance == 0,
+            segment_exponent: 0,
+            key_interval: 0,
         };
         let (encoded, trials) = encode_auto(&channels, &params).unwrap();
         assert_eq!(decode(&encoded.bytes).unwrap(), encoded.decoded);
         assert!(worst(&channels, &encoded.decoded) <= tolerance);
         for c in 0..2 {
             let mine: Vec<_> = trials.iter().filter(|t| t.channel == c).collect();
-            let alone = mine
-                .iter()
-                .find(|t| {
-                    t.config
-                        == ChannelConfig {
-                            cascade: params.cascade,
-                            ..ChannelConfig::default()
-                        }
-                })
-                .unwrap();
+            // The first trial is the correction layer alone.
+            let alone = mine[0];
+            assert!(alone.config.gradients.is_none() && alone.config.anchors.is_none());
+            assert_eq!(alone.config.cascade, params.cascade);
             let chosen = mine
                 .iter()
-                .find(|t| t.config == encoded.config.channels[c])
+                .find(|t| t.config == encoded.config.segments[0].channels[c])
                 .unwrap();
             assert!(chosen.bytes <= alone.bytes);
             assert_eq!(chosen.bytes, mine.iter().map(|t| t.bytes).min().unwrap());
         }
         if tolerance > 0 {
-            assert_eq!(encoded.config.stereo, Stereo::Independent);
+            assert_eq!(encoded.config.segments[0].stereo, Stereo::Independent);
         }
     }
 }
@@ -294,15 +285,15 @@ fn automatic_search_never_loses_to_the_correction_layer_alone() {
 fn malformed_streams_are_rejected() {
     let x = signal(3000, 40.0, 2);
     let a = analysis(&x);
-    let config = StreamConfig {
-        channels: vec![ChannelConfig {
+    let config = single(
+        0,
+        ChannelConfig {
             gradients: Some(gradients()),
             anchors: Some(anchors(None)),
             ..ChannelConfig::default()
-        }],
-        ..plain(0, 1)
-    };
-    let bytes = encode(std::slice::from_ref(&x), &[Some(&a)], &config)
+        },
+    );
+    let bytes = encode(std::slice::from_ref(&x), &[vec![Some(&a)]], &config)
         .unwrap()
         .bytes;
     assert!(decode(&bytes[..bytes.len() - 1]).is_err());
@@ -325,14 +316,107 @@ fn malformed_streams_are_rejected() {
             assert_eq!(v[0].len(), x.len());
         }
     }
-    assert!(encode(&[vec![]], &[None], &plain(0, 1)).is_err());
-    assert!(encode(&[vec![1 << 23]], &[None], &plain(0, 1)).is_err());
-    let needs_analysis = StreamConfig {
-        channels: vec![ChannelConfig {
+    assert!(encode(&[vec![]], &[vec![None]], &plain(0, 1)).is_err());
+    assert!(encode(&[vec![1 << 23]], &[vec![None]], &plain(0, 1)).is_err());
+    let needs_analysis = single(
+        0,
+        ChannelConfig {
             gradients: Some(gradients()),
             ..ChannelConfig::default()
-        }],
-        ..plain(0, 1)
+        },
+    );
+    assert!(encode(std::slice::from_ref(&x), &[vec![None]], &needs_analysis).is_err());
+    // The first segment must be a key.
+    let mut first = plain(0, 1);
+    first.segments[0].key = false;
+    assert!(encode(std::slice::from_ref(&x), &[vec![None]], &first).is_err());
+    let mut flags = bytes.clone();
+    flags[20] &= !1;
+    assert!(decode(&flags).is_err());
+}
+
+/// Segments: continuations inherit the correction state, keys restart it and
+/// can be decoded alone; every segment chooses its own stereo mode and layers.
+#[test]
+fn segments_continue_or_restart_and_keys_decode_alone() {
+    let n = 3 * 4096 + 1000;
+    let l = signal(n, 30.0, 4);
+    let r: Vec<i32> = l.iter().map(|v| v / 2 + 3).collect();
+    let channels = vec![l, r];
+    let a = |x: &[i32]| analysis(x);
+    let ranges = [0..4096, 4096..8192, 8192..12288, 12288..n];
+    // Gradients in segment 1 on the left channel (an independent segment).
+    let tonal = a(&channels[0][4096..8192]);
+    let layered = ChannelConfig {
+        gradients: Some(gradients()),
+        ..ChannelConfig::default()
     };
-    assert!(encode(std::slice::from_ref(&x), &[None], &needs_analysis).is_err());
+    let segment = |key: bool, stereo: Stereo, first: ChannelConfig| SegmentConfig {
+        key,
+        stereo,
+        channels: vec![first, ChannelConfig::default()],
+    };
+    for tolerance in [0, 16] {
+        let mid = if tolerance == 0 {
+            Stereo::MidSide
+        } else {
+            Stereo::Independent
+        };
+        let config = StreamConfig {
+            tolerance,
+            segment_exponent: 12,
+            segments: vec![
+                segment(true, Stereo::Independent, ChannelConfig::default()),
+                segment(false, Stereo::Independent, layered),
+                segment(true, mid, ChannelConfig::default()),
+                segment(false, mid, ChannelConfig::default()),
+            ],
+        };
+        let analyses = vec![
+            vec![None, None],
+            vec![Some(&tonal), None],
+            vec![None, None],
+            vec![None, None],
+        ];
+        let encoded = encode(&channels, &analyses, &config).unwrap();
+        assert_eq!(encoded.stats.segments, 4);
+        assert_eq!(encoded.stats.keys, 2);
+        assert!(encoded.stats.channels[0].groups > 0);
+        let decoded = decode(&encoded.bytes).unwrap();
+        assert_eq!(decoded, encoded.decoded);
+        assert!(worst(&channels, &decoded) <= tolerance);
+        // Random access at the second key: the same samples from there on.
+        let tail = decode_from(&encoded.bytes, 2).unwrap();
+        for (t, d) in tail.iter().zip(&decoded) {
+            assert_eq!(t[..], d[8192..]);
+        }
+        assert!(decode_from(&encoded.bytes, 1).is_err(), "not a key");
+        assert!(decode_from(&encoded.bytes, 4).is_err(), "no such segment");
+        // A continuation is cheaper than a key over the same samples.
+        let mut keys = config.clone();
+        keys.segments[3].key = true;
+        let restarted = encode(&channels, &analyses, &keys).unwrap();
+        assert!(restarted.bytes.len() > encoded.bytes.len());
+        assert!(worst(&channels, &decode(&restarted.bytes).unwrap()) <= tolerance);
+        let _ = &ranges;
+    }
+    // The automatic search per segment, with a key every second segment.
+    let params = AutoParams {
+        tolerance: 0,
+        tones: ToneParams::default(),
+        gradients: false,
+        anchors: false,
+        cascade: true,
+        segment_exponent: 12,
+        key_interval: 2,
+    };
+    let (encoded, trials) = encode_auto(&channels, &params).unwrap();
+    let keys: Vec<bool> = encoded.config.segments.iter().map(|s| s.key).collect();
+    assert_eq!(keys, [true, false, true, false]);
+    assert_eq!(decode(&encoded.bytes).unwrap(), channels);
+    assert_eq!(
+        decode_from(&encoded.bytes, 2).unwrap()[1][..],
+        channels[1][8192..]
+    );
+    assert!(trials.iter().any(|t| t.segment == 3));
 }

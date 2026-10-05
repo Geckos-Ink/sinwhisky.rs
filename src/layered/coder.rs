@@ -1,9 +1,39 @@
-//! Entropy and bit coders shared by the SWL2 chunks: an adaptive binary range
-//! coder (LZMA style, 11-bit probabilities, shift 5) with an adaptive Elias-gamma
-//! binarization, and an MSB-first bit packer for fixed-width fields.
+//! The entropy coder shared by the SWL2 chunks: an adaptive binary range coder
+//! (LZMA style, 12-bit probabilities, each the mean of a fast and a slow
+//! estimate) with an adaptive Elias-gamma binarization that also models the two
+//! bits below the leading one.
 use crate::Error;
 
-pub(super) const PROB_INIT: u16 = 1024;
+/// Probability resolution in bits.
+const PROB_BITS: u32 = 12;
+
+/// An adaptive bit probability: the mean of a fast and a slow estimate of
+/// P(bit = 0), in units of 2^-PROB_BITS.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Prob {
+    fast: u16,
+    slow: u16,
+}
+impl Prob {
+    pub(super) const NEW: Prob = Prob {
+        fast: 1 << (PROB_BITS - 1),
+        slow: 1 << (PROB_BITS - 1),
+    };
+    fn p(self) -> u32 {
+        ((u32::from(self.fast) + u32::from(self.slow)) >> 1).clamp(31, (1 << PROB_BITS) - 31)
+    }
+    fn update(&mut self, bit: bool) {
+        const FAST: u32 = 4;
+        const SLOW: u32 = 7;
+        if bit {
+            self.fast -= self.fast >> FAST;
+            self.slow -= self.slow >> SLOW;
+        } else {
+            self.fast += ((1 << PROB_BITS) - self.fast) >> FAST;
+            self.slow += ((1 << PROB_BITS) - self.slow) >> SLOW;
+        }
+    }
+}
 
 pub(super) fn corrupt() -> Error {
     Error::InvalidParameter("SWL2 stream")
@@ -49,16 +79,15 @@ impl RangeEncoder {
             self.shift_low();
         }
     }
-    pub(super) fn bit(&mut self, p: &mut u16, bit: bool) {
-        let bound = (self.range >> 11) * u32::from(*p);
+    pub(super) fn bit(&mut self, p: &mut Prob, bit: bool) {
+        let bound = (self.range >> PROB_BITS) * p.p();
         if bit {
             self.low += u64::from(bound);
             self.range -= bound;
-            *p -= *p >> 5;
         } else {
             self.range = bound;
-            *p += (2048 - *p) >> 5;
         }
+        p.update(bit);
         self.normalize();
     }
     /// `bits` equiprobable bits of `value`, most significant first.
@@ -118,18 +147,17 @@ impl<'a> RangeDecoder<'a> {
         }
         Ok(())
     }
-    pub(super) fn bit(&mut self, p: &mut u16) -> Result<bool, Error> {
-        let bound = (self.range >> 11) * u32::from(*p);
+    pub(super) fn bit(&mut self, p: &mut Prob) -> Result<bool, Error> {
+        let bound = (self.range >> PROB_BITS) * p.p();
         let bit = if self.code < bound {
             self.range = bound;
-            *p += (2048 - *p) >> 5;
             false
         } else {
             self.code -= bound;
             self.range -= bound;
-            *p -= *p >> 5;
             true
         };
+        p.update(bit);
         self.normalize()?;
         Ok(bit)
     }
@@ -148,19 +176,22 @@ impl<'a> RangeDecoder<'a> {
     }
 }
 
+/// Bits below the leading one coded adaptively (a binary tree per length).
+const MODELLED: usize = 2;
+
 /// Adaptive Elias-gamma code of v+1: the length in unary with one context per
-/// position, the first bit below the leading one with a context per length, and
-/// the remaining bits direct.
+/// position, the first `MODELLED` bits below the leading one with a binary tree
+/// of contexts per length, and the remaining bits direct.
 #[derive(Clone)]
 pub(super) struct Gamma {
-    prefix: [u16; 48],
-    first: [u16; 48],
+    prefix: [Prob; 48],
+    tree: [[Prob; 1 << MODELLED]; 48],
 }
 impl Gamma {
     pub(super) fn new() -> Self {
         Self {
-            prefix: [PROB_INIT; 48],
-            first: [PROB_INIT; 48],
+            prefix: [Prob::NEW; 48],
+            tree: [[Prob::NEW; 1 << MODELLED]; 48],
         }
     }
     pub(super) fn put(&mut self, e: &mut RangeEncoder, v: u64) {
@@ -170,10 +201,15 @@ impl Gamma {
             e.bit(&mut self.prefix[i], true);
         }
         e.bit(&mut self.prefix[width - 1], false);
-        if width >= 2 {
-            e.bit(&mut self.first[width], (m >> (width - 2)) & 1 == 1);
-            e.direct(m, width as u32 - 2);
+        let below = width - 1;
+        let modelled = below.min(MODELLED);
+        let mut node = 1;
+        for i in 0..modelled {
+            let bit = (m >> (below - 1 - i)) & 1;
+            e.bit(&mut self.tree[width][node], bit == 1);
+            node = 2 * node + bit as usize;
         }
+        e.direct(m, (below - modelled) as u32);
     }
     pub(super) fn get(&mut self, d: &mut RangeDecoder) -> Result<u64, Error> {
         let mut width = 1;
@@ -183,55 +219,15 @@ impl Gamma {
                 return Err(corrupt());
             }
         }
-        if width == 1 {
-            return Ok(0);
+        let below = width - 1;
+        let modelled = below.min(MODELLED);
+        let mut node = 1;
+        for _ in 0..modelled {
+            node = 2 * node + usize::from(d.bit(&mut self.tree[width][node])?);
         }
-        let first = u64::from(d.bit(&mut self.first[width])?);
-        let rest = d.direct(width as u32 - 2)?;
-        Ok(((1u64 << (width - 1)) | (first << (width - 2)) | rest) - 1)
-    }
-}
-
-/// MSB-first bit packer for fixed-width fields.
-pub(super) struct BitWriter {
-    out: Vec<u8>,
-    used: u32,
-}
-impl BitWriter {
-    pub(super) fn new() -> Self {
-        Self {
-            out: Vec::new(),
-            used: 8,
-        }
-    }
-    pub(super) fn put(&mut self, value: u64, bits: u32) {
-        for i in (0..bits).rev() {
-            if self.used == 8 {
-                self.out.push(0);
-                self.used = 0;
-            }
-            if (value >> i) & 1 == 1 {
-                *self.out.last_mut().unwrap() |= 0x80 >> self.used;
-            }
-            self.used += 1;
-        }
-    }
-    /// Two's complement in `bits` bits; the caller guarantees the range.
-    pub(super) fn put_signed(&mut self, value: i64, bits: u32) {
-        if bits > 0 {
-            self.put((value as u64) & mask(bits), bits);
-        }
-    }
-    pub(super) fn finish(self) -> Vec<u8> {
-        self.out
-    }
-}
-
-pub(super) fn mask(bits: u32) -> u64 {
-    if bits >= 64 {
-        u64::MAX
-    } else {
-        (1u64 << bits) - 1
+        let rest = d.direct((below - modelled) as u32)?;
+        // `node` holds the leading one and the modelled bits.
+        Ok(((node as u64) << (below - modelled) | rest) - 1)
     }
 }
 
@@ -248,36 +244,6 @@ pub(super) fn signed_width(v: i64) -> u32 {
         width(v as u64) + 1
     } else {
         width(!v as u64) + 1
-    }
-}
-
-pub(super) struct BitReader<'a> {
-    data: &'a [u8],
-    bit: usize,
-}
-impl<'a> BitReader<'a> {
-    pub(super) fn new(data: &'a [u8]) -> Self {
-        Self { data, bit: 0 }
-    }
-    pub(super) fn get(&mut self, bits: u32) -> Result<u64, Error> {
-        if bits > 64 || self.bit + bits as usize > self.data.len() * 8 {
-            return Err(corrupt());
-        }
-        let mut v = 0u64;
-        for _ in 0..bits {
-            let byte = self.data[self.bit / 8];
-            v = (v << 1) | u64::from((byte >> (7 - self.bit % 8)) & 1);
-            self.bit += 1;
-        }
-        Ok(v)
-    }
-    pub(super) fn get_signed(&mut self, bits: u32) -> Result<i64, Error> {
-        if bits == 0 {
-            return Ok(0);
-        }
-        let v = self.get(bits)?;
-        let shift = 64 - bits;
-        Ok(((v << shift) as i64) >> shift)
     }
 }
 
@@ -298,9 +264,6 @@ impl<'a> Bytes<'a> {
     }
     pub(super) fn u8(&mut self) -> Result<u8, Error> {
         Ok(self.take(1)?[0])
-    }
-    pub(super) fn i8(&mut self) -> Result<i8, Error> {
-        Ok(self.take(1)?[0] as i8)
     }
     pub(super) fn u16(&mut self) -> Result<u16, Error> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))

@@ -11,20 +11,23 @@
 //! one exponential ratio for all members). Members carry frequency, gradient,
 //! amplitude and phase.
 //!
-//! The chunk is byte-wise: a header declares the bit width of every field, just
-//! enough for the largest value in the chunk, and the records are bit-packed
-//! MSB-first. A member's precision class c (5 bits) scales its phase, frequency and
-//! gradient quanta so each parameter costs about `precision` of waveform error:
-//! phase 2*pi/2^(c+3), frequency 2^-(c+t+1), gradient 2^-(c+2t), with
-//! t = bits of the segment's span in samples. See docs/SWL2.md.
-use super::coder::{corrupt, signed_width, width, BitReader, BitWriter, Bytes};
+//! A member's precision class c scales its phase, frequency and gradient quanta
+//! so each parameter costs about `precision` of waveform error: phase
+//! 2*pi/2^(c+3), frequency 2^-(c+t+1), gradient 2^-(c+2t), with t = bits of the
+//! segment's span in samples. The chunk is range coded with an adaptive model
+//! per field. A member that continues a track names its predecessor among the
+//! tracks still open at its start (by rank in end frequency) and codes only the
+//! residuals of its class, frequency, amplitude and phase from the
+//! predecessor's end values, which encoder and decoder compute alike; a new
+//! member codes its frequency as a step from the previous new member of its
+//! group. See docs/SWL2.md.
+use super::coder::{corrupt, width, Bytes, Gamma, Prob, RangeDecoder, RangeEncoder};
 use crate::bands::ToneAnalysis;
 use crate::Error;
 use std::f64::consts::{PI, TAU};
 
 const MAX_DURATION: usize = 4096;
 const MAX_MEMBERS: usize = 4096;
-const MAX_WIDTH: u32 = 62;
 
 /// Which tones become gradient groups, and how precisely.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -138,6 +141,8 @@ struct Segment {
     a1: f64,
     fade_in: bool,
     fade_out: bool,
+    /// Index of the track the segment belongs to.
+    track: usize,
 }
 
 /// Least squares of `phase + omega*t + gradient*t^2/2` to unwrapped phases and
@@ -205,6 +210,7 @@ fn segment_track(track: &[Breakpoint], hop: f64, tolerance: f64) -> Vec<Segment>
             a1: p.amplitude,
             fade_in: true,
             fade_out: true,
+            track: 0,
         }];
     }
     let fit = |s: usize, e: usize| {
@@ -248,6 +254,7 @@ fn segment_track(track: &[Breakpoint], hop: f64, tolerance: f64) -> Vec<Segment>
             a1: track[e].amplitude,
             fade_in: s == 0,
             fade_out: e + 1 == track.len(),
+            track: 0,
         });
         s = e;
     }
@@ -319,9 +326,17 @@ pub(super) fn encode(analysis: &ToneAnalysis, config: &GradientConfig) -> Result
     let h = hop as f64;
     let p = config.precision;
     let mut segments: Vec<Segment> = Vec::new();
-    for track in link(analysis, config) {
-        segments.extend(segment_track(&track, h, config.segment_tolerance));
+    for (id, track) in link(analysis, config).into_iter().enumerate() {
+        segments.extend(
+            segment_track(&track, h, config.segment_tolerance)
+                .into_iter()
+                .map(|s| Segment { track: id, ..s }),
+        );
     }
+    // The last member (group, index) of each track so far.
+    let mut last: std::collections::HashMap<usize, (usize, usize)> =
+        std::collections::HashMap::new();
+    let mut links: Vec<Vec<Option<(usize, usize)>>> = Vec::new();
     segments.sort_by(|a, b| {
         (a.start, a.duration)
             .cmp(&(b.start, b.duration))
@@ -340,7 +355,14 @@ pub(super) fn encode(analysis: &ToneAnalysis, config: &GradientConfig) -> Result
         }
         let (start, duration) = (segments[i].start, segments[i].duration);
         let mut members = Vec::with_capacity(j - i);
+        let mut group_links = Vec::with_capacity(j - i);
         for s in &segments[i..j] {
+            group_links.push(if s.fade_in {
+                None
+            } else {
+                last.get(&s.track).copied()
+            });
+            last.insert(s.track, (groups.len(), members.len()));
             let largest = s.a0.max(s.a1);
             let class = (largest / p).log2().ceil().clamp(0.0, 24.0) as u32;
             let eo = omega_exponent(class, duration, hop);
@@ -391,98 +413,273 @@ pub(super) fn encode(analysis: &ToneAnalysis, config: &GradientConfig) -> Result
             envelope,
             members,
         });
+        links.push(group_links);
         i = j;
     }
-    pack(hop, p, &groups)
+    pack(hop, p, &groups, &links)
 }
 
-fn pack(hop: usize, precision: f64, groups: &[Group]) -> Result<Vec<u8>, Error> {
-    let mut w_start = 0;
-    let mut w_duration = 0;
-    let mut w_count = 0;
-    let mut w_amplitude = 0;
-    let mut w_ratio = 0;
-    let mut o_omega: i64 = -64;
-    let mut o_gradient: i64 = -64;
-    let mut previous = 0;
-    for g in groups {
-        w_start = w_start.max(width((g.start - previous) as u64));
-        previous = g.start;
-        w_duration = w_duration.max(width(g.duration as u64));
-        w_count = w_count.max(width(g.members.len() as u64 - 1));
-        if let Envelope::Exponential(r) = g.envelope {
-            w_ratio = w_ratio.max(signed_width(r));
-        }
-        for m in &g.members {
-            w_amplitude = w_amplitude.max(width(m.a0_index)).max(width(m.a1_index));
-            let eo = omega_exponent(m.class, g.duration, hop) as i64;
-            o_omega = o_omega.max(width(m.omega_index) as i64 - eo);
-            if g.duration > 0 {
-                let eg = gradient_exponent(m.class, g.duration, hop) as i64;
-                o_gradient = o_gradient.max(signed_width(m.gradient_index) as i64 - eg);
-            }
+/// Where a track's next segment should start: the end of an open member.
+#[derive(Debug, Clone, Copy)]
+struct OpenEnd {
+    omega: f64,
+    phase: f64,
+    amplitude_index: u64,
+    class: u32,
+    /// (group, member) of the open member.
+    key: (usize, usize),
+}
+
+/// Members whose track continues (no fade-out), by the frame where they end,
+/// each list in increasing end frequency. Encoder and decoder keep the same
+/// list, so a continuing member names its predecessor by rank.
+#[derive(Default)]
+struct OpenTracks {
+    by_frame: std::collections::BTreeMap<usize, Vec<OpenEnd>>,
+}
+impl OpenTracks {
+    fn insert(&mut self, frame: usize, end: OpenEnd) {
+        let list = self.by_frame.entry(frame).or_default();
+        let at = list.partition_point(|e| {
+            e.omega
+                .total_cmp(&end.omega)
+                .then(e.key.cmp(&end.key))
+                .is_lt()
+        });
+        list.insert(at, end);
+    }
+    fn rank(&self, frame: usize, key: (usize, usize)) -> Option<usize> {
+        self.by_frame.get(&frame)?.iter().position(|e| e.key == key)
+    }
+    fn take(&mut self, frame: usize, rank: usize) -> Option<OpenEnd> {
+        let list = self.by_frame.get_mut(&frame)?;
+        (rank < list.len()).then(|| list.remove(rank))
+    }
+    /// Forget tracks that ended before `frame`: nothing can continue them.
+    fn drop_before(&mut self, frame: usize) {
+        self.by_frame = self.by_frame.split_off(&frame);
+    }
+}
+
+/// The end of a decoded member: frequency and phase at the end of its span (in
+/// binary64 additions and multiplications only, so encoder and decoder agree on
+/// every platform) and its end amplitude index.
+fn open_end(m: &Member, g: &Group, hop: usize, key: (usize, usize)) -> OpenEnd {
+    let span = (g.duration * hop) as f64;
+    let omega = m.omega_index as f64 / (omega_exponent(m.class, g.duration, hop) as f64).exp2();
+    let gradient =
+        m.gradient_index as f64 / (gradient_exponent(m.class, g.duration, hop) as f64).exp2();
+    let phase = m.phase_index as f64 * TAU / (phase_bits(m.class) as f64).exp2();
+    OpenEnd {
+        omega: omega + gradient * span,
+        phase: phase + omega * span + 0.5 * gradient * span * span,
+        amplitude_index: if g.envelope == Envelope::Linear {
+            m.a1_index
+        } else {
+            m.a0_index
+        },
+        class: m.class,
+        key,
+    }
+}
+
+/// Predicted frequency and phase indices of a continuing member of class
+/// `class` in a group of `duration` hops.
+fn predicted(end: &OpenEnd, class: u32, duration: usize, hop: usize) -> (u64, u64) {
+    let eo = omega_exponent(class, duration, hop);
+    let bp = phase_bits(class);
+    let omega = (end.omega.max(0.0) * (eo as f64).exp2()).round();
+    let phase = (end.phase.rem_euclid(TAU) / TAU * (bp as f64).exp2()).round() as u64;
+    (
+        omega.min(MAX_INDEX as f64) as u64,
+        phase & ((1u64 << bp) - 1),
+    )
+}
+
+/// Index of frequency `f` on the grid of exponent `e`.
+fn on_grid(f: f64, e: u32) -> u64 {
+    (f * (e as f64).exp2()).round().min(MAX_INDEX as f64) as u64
+}
+
+/// Largest frequency or gradient index magnitude.
+const MAX_INDEX: u64 = 1 << 46;
+
+fn signed(v: i64) -> u64 {
+    ((v << 1) ^ (v >> 63)) as u64
+}
+fn unsigned(v: u64) -> i64 {
+    (v >> 1) as i64 ^ -((v & 1) as i64)
+}
+
+/// Phase difference as the signed residue of the shortest way round.
+fn wrap(d: i64, bits: u32) -> i64 {
+    let full = 1i64 << bits;
+    let r = d.rem_euclid(full);
+    if r >= full / 2 {
+        r - full
+    } else {
+        r
+    }
+}
+
+/// Adaptive models of the range-coded chunk body.
+struct Models {
+    start: Gamma,
+    duration: Gamma,
+    envelope: [Prob; 2],
+    ratio: Gamma,
+    count: Gamma,
+    continued: Prob,
+    fade_out: [Prob; 2],
+    link: Gamma,
+    class: Gamma,
+    class_change: Gamma,
+    omega: Gamma,
+    omega_step: Gamma,
+    omega_residual: Gamma,
+    gradient: [Gamma; 2],
+    amplitude: Gamma,
+    amplitude_residual: Gamma,
+    amplitude_end: Gamma,
+    phase_residual: Gamma,
+}
+impl Models {
+    fn new() -> Self {
+        Self {
+            start: Gamma::new(),
+            duration: Gamma::new(),
+            envelope: [Prob::NEW; 2],
+            ratio: Gamma::new(),
+            count: Gamma::new(),
+            continued: Prob::NEW,
+            fade_out: [Prob::NEW; 2],
+            link: Gamma::new(),
+            class: Gamma::new(),
+            class_change: Gamma::new(),
+            omega: Gamma::new(),
+            omega_step: Gamma::new(),
+            omega_residual: Gamma::new(),
+            gradient: [Gamma::new(), Gamma::new()],
+            amplitude: Gamma::new(),
+            amplitude_residual: Gamma::new(),
+            amplitude_end: Gamma::new(),
+            phase_residual: Gamma::new(),
         }
     }
-    let o_omega = o_omega.clamp(-127, 127);
-    let o_gradient = o_gradient.clamp(-127, 127);
+}
+
+/// Header: u16 hop, f32 precision, u32 group count; then the range-coded groups.
+fn pack(
+    hop: usize,
+    precision: f64,
+    groups: &[Group],
+    links: &[Vec<Option<(usize, usize)>>],
+) -> Result<Vec<u8>, Error> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(hop as u16).to_le_bytes());
     bytes.extend_from_slice(&(precision as f32).to_le_bytes());
-    for w in [w_start, w_duration, w_count, w_amplitude, w_ratio] {
-        bytes.push(w as u8);
-    }
-    bytes.push(o_omega as i8 as u8);
-    bytes.push(o_gradient as i8 as u8);
     bytes.extend_from_slice(&(groups.len() as u32).to_le_bytes());
-    let mut bits = BitWriter::new();
+    let mut e = RangeEncoder::new();
+    let mut m = Models::new();
+    let mut open = OpenTracks::default();
     let mut previous = 0;
-    for g in groups {
-        bits.put((g.start - previous) as u64, w_start);
-        previous = g.start;
-        bits.put(g.duration as u64, w_duration);
-        let (code, ratio) = match g.envelope {
-            Envelope::Constant => (0, None),
-            Envelope::Linear => (1, None),
-            Envelope::Exponential(r) => (2, Some(r)),
-        };
-        bits.put(code, 2);
-        if let Some(r) = ratio {
-            bits.put_signed(r, w_ratio);
+    // Rank of the last claimed predecessor at the current start frame.
+    let mut last_rank = 0usize;
+    for (gi, g) in groups.iter().enumerate() {
+        if g.start != previous || gi == 0 {
+            open.drop_before(g.start);
+            last_rank = 0;
         }
-        bits.put(g.members.len() as u64 - 1, w_count);
-        for m in &g.members {
-            let (wo, wg) = member_widths(m.class, g.duration, hop, o_omega, o_gradient);
-            if wo > MAX_WIDTH || wg > MAX_WIDTH {
+        m.start.put(&mut e, (g.start - previous) as u64);
+        previous = g.start;
+        m.duration.put(&mut e, g.duration as u64);
+        if g.duration > 0 {
+            let (code, ratio) = match g.envelope {
+                Envelope::Constant => (0, None),
+                Envelope::Linear => (1, None),
+                Envelope::Exponential(r) => (2, Some(r)),
+            };
+            e.bit(&mut m.envelope[0], code != 0);
+            if code != 0 {
+                e.bit(&mut m.envelope[1], code == 2);
+            }
+            if let Some(r) = ratio {
+                m.ratio.put(&mut e, signed(r));
+            }
+        }
+        m.count.put(&mut e, g.members.len() as u64 - 1);
+        // Frequency of the previous new member of the group.
+        let mut below: Option<f64> = None;
+        for (mi, member) in g.members.iter().enumerate() {
+            let link = links[gi][mi];
+            e.bit(&mut m.continued, link.is_some());
+            let end = match link {
+                Some(key) => {
+                    let rank = open
+                        .rank(g.start, key)
+                        .ok_or(Error::InvalidParameter("gradient track link"))?;
+                    m.link.put(&mut e, signed(rank as i64 - last_rank as i64));
+                    last_rank = rank;
+                    open.take(g.start, rank)
+                }
+                None => None,
+            };
+            e.bit(&mut m.fade_out[usize::from(end.is_some())], member.fade_out);
+            let bp = phase_bits(member.class);
+            match end {
+                Some(end) => {
+                    m.class_change.put(
+                        &mut e,
+                        signed(i64::from(member.class) - i64::from(end.class)),
+                    );
+                    let (omega, phase) = predicted(&end, member.class, g.duration, hop);
+                    m.omega_residual
+                        .put(&mut e, signed(member.omega_index as i64 - omega as i64));
+                    m.amplitude_residual.put(
+                        &mut e,
+                        signed(member.a0_index as i64 - end.amplitude_index as i64),
+                    );
+                    let d = wrap(member.phase_index as i64 - phase as i64, bp);
+                    m.phase_residual.put(&mut e, signed(d));
+                }
+                None => {
+                    m.class.put(&mut e, u64::from(member.class));
+                    let eo = omega_exponent(member.class, g.duration, hop);
+                    match below {
+                        Some(f) => {
+                            let guess = on_grid(f, eo);
+                            m.omega_step
+                                .put(&mut e, signed(member.omega_index as i64 - guess as i64));
+                        }
+                        None => m.omega.put(&mut e, member.omega_index),
+                    }
+                    below = Some(member.omega_index as f64 / (eo as f64).exp2());
+                    m.amplitude.put(&mut e, member.a0_index);
+                    e.direct(member.phase_index, bp);
+                }
+            }
+            if g.duration > 0 {
+                m.gradient[usize::from(end.is_some())].put(&mut e, signed(member.gradient_index));
+            }
+            if g.envelope == Envelope::Linear {
+                m.amplitude_end.put(
+                    &mut e,
+                    signed(member.a1_index as i64 - member.a0_index as i64),
+                );
+            }
+            if member.omega_index >= MAX_INDEX || member.gradient_index.unsigned_abs() >= MAX_INDEX
+            {
                 return Err(Error::InvalidParameter("gradient field too wide"));
             }
-            bits.put(u64::from(m.class), 5);
-            bits.put(u64::from(m.fade_in), 1);
-            bits.put(u64::from(m.fade_out), 1);
-            bits.put(m.omega_index, wo);
-            if g.duration > 0 {
-                bits.put_signed(m.gradient_index, wg);
+        }
+        for (mi, member) in g.members.iter().enumerate() {
+            if !member.fade_out {
+                open.insert(g.start + g.duration, open_end(member, g, hop, (gi, mi)));
             }
-            bits.put(m.a0_index, w_amplitude);
-            if g.envelope == Envelope::Linear {
-                bits.put(m.a1_index, w_amplitude);
-            }
-            bits.put(m.phase_index, phase_bits(m.class));
         }
     }
-    bytes.extend(bits.finish());
+    bytes.extend(e.finish());
     Ok(bytes)
-}
-
-fn member_widths(
-    class: u32,
-    duration: usize,
-    hop: usize,
-    o_omega: i64,
-    o_gradient: i64,
-) -> (u32, u32) {
-    let wo = (o_omega + omega_exponent(class, duration, hop) as i64).max(0) as u32;
-    let wg = (o_gradient + gradient_exponent(class, duration, hop) as i64).max(0) as u32;
-    (wo, wg)
 }
 
 /// Parse a chunk payload; `len` bounds every count.
@@ -490,71 +687,119 @@ pub(super) fn parse(payload: &[u8], len: usize) -> Result<Gradients, Error> {
     let mut b = Bytes::new(payload);
     let hop = b.u16()? as usize;
     let precision = f64::from(b.f32()?);
-    let w: Vec<u32> = (0..5)
-        .map(|_| b.u8().map(u32::from))
-        .collect::<Result<_, _>>()?;
-    let (w_start, w_duration, w_count, w_amplitude, w_ratio) = (w[0], w[1], w[2], w[3], w[4]);
-    let o_omega = i64::from(b.i8()?);
-    let o_gradient = i64::from(b.i8()?);
     let count = b.u32()? as usize;
-    if !(8..=32768).contains(&hop)
-        || !(1e-3..=1e6).contains(&precision)
-        || w.iter().any(|&v| v > MAX_WIDTH)
-        || count > len
-    {
+    if !(8..=32768).contains(&hop) || !(1e-3..=1e6).contains(&precision) || count > len {
         return Err(corrupt());
     }
-    let mut bits = BitReader::new(b.rest());
-    let mut groups = Vec::with_capacity(count);
+    let mut d = RangeDecoder::new(b.rest())?;
+    let mut m = Models::new();
+    let mut open = OpenTracks::default();
+    let mut groups: Vec<Group> = Vec::with_capacity(count);
     let mut start = 0usize;
-    for _ in 0..count {
-        start = start
-            .checked_add(bits.get(w_start)? as usize)
-            .ok_or_else(corrupt)?;
-        let duration = bits.get(w_duration)? as usize;
-        if start.saturating_mul(hop) > len + hop || duration > MAX_DURATION {
+    let mut last_rank = 0usize;
+    for gi in 0..count {
+        let delta = d_get(&mut m.start, &mut d, len as u64)? as usize;
+        if delta > 0 || gi == 0 {
+            open.drop_before(start + delta);
+            last_rank = 0;
+        }
+        start += delta;
+        let duration = d_get(&mut m.duration, &mut d, MAX_DURATION as u64)? as usize;
+        if start.saturating_mul(hop) > len + hop {
             return Err(corrupt());
         }
-        let envelope = match bits.get(2)? {
-            0 => Envelope::Constant,
-            1 => Envelope::Linear,
-            2 => Envelope::Exponential(bits.get_signed(w_ratio)?),
-            _ => return Err(corrupt()),
+        let envelope = if duration > 0 && d.bit(&mut m.envelope[0])? {
+            if d.bit(&mut m.envelope[1])? {
+                Envelope::Exponential(unsigned(d_get(&mut m.ratio, &mut d, 1 << 40)?))
+            } else {
+                Envelope::Linear
+            }
+        } else {
+            Envelope::Constant
         };
-        if duration == 0 && envelope != Envelope::Constant {
-            return Err(corrupt());
-        }
-        let members = bits.get(w_count)? as usize + 1;
-        if members > MAX_MEMBERS {
-            return Err(corrupt());
-        }
-        let mut list = Vec::with_capacity(members);
+        let members = d_get(&mut m.count, &mut d, MAX_MEMBERS as u64 - 1)? as usize + 1;
+        let mut group = Group {
+            start,
+            duration,
+            envelope,
+            members: Vec::with_capacity(members),
+        };
+        let mut below: Option<f64> = None;
         for _ in 0..members {
-            let class = bits.get(5)? as u32;
-            if class > 24 {
-                return Err(corrupt());
-            }
-            let fade_in = bits.get(1)? == 1;
-            let fade_out = bits.get(1)? == 1;
-            let (wo, wg) = member_widths(class, duration, hop, o_omega, o_gradient);
-            if wo > MAX_WIDTH || wg > MAX_WIDTH {
-                return Err(corrupt());
-            }
-            let omega_index = bits.get(wo)?;
+            let continued = d.bit(&mut m.continued)?;
+            let end = if continued {
+                let step = unsigned(d_get(&mut m.link, &mut d, 1 << 32)?);
+                let rank = usize::try_from(last_rank as i64 + step).map_err(|_| corrupt())?;
+                last_rank = rank;
+                Some(open.take(start, rank).ok_or_else(corrupt)?)
+            } else {
+                None
+            };
+            let fade_out = d.bit(&mut m.fade_out[usize::from(continued)])?;
+            let (class, omega_index, a0_index, phase_index) = match end {
+                Some(end) => {
+                    let change = unsigned(d_get(&mut m.class_change, &mut d, 64)?);
+                    let class = i64::from(end.class) + change;
+                    if !(0..=24).contains(&class) {
+                        return Err(corrupt());
+                    }
+                    let class = class as u32;
+                    let (omega, phase) = predicted(&end, class, duration, hop);
+                    let omega_index = omega as i64
+                        + unsigned(d_get(&mut m.omega_residual, &mut d, 2 * MAX_INDEX)?);
+                    let a0 = end.amplitude_index as i64
+                        + unsigned(d_get(&mut m.amplitude_residual, &mut d, 1 << 40)?);
+                    let bp = phase_bits(class);
+                    let p = (phase as i64
+                        + unsigned(d_get(&mut m.phase_residual, &mut d, 1 << 40)?))
+                    .rem_euclid(1 << bp);
+                    if !(0..MAX_INDEX as i64).contains(&omega_index) || a0 < 0 {
+                        return Err(corrupt());
+                    }
+                    (class, omega_index as u64, a0 as u64, p as u64)
+                }
+                None => {
+                    let class = d_get(&mut m.class, &mut d, 24)? as u32;
+                    let eo = omega_exponent(class, duration, hop);
+                    let omega_index = match below {
+                        Some(f) => {
+                            let v = on_grid(f, eo) as i64
+                                + unsigned(d_get(&mut m.omega_step, &mut d, 2 * MAX_INDEX)?);
+                            if !(0..MAX_INDEX as i64).contains(&v) {
+                                return Err(corrupt());
+                            }
+                            v as u64
+                        }
+                        None => d_get(&mut m.omega, &mut d, MAX_INDEX - 1)?,
+                    };
+                    below = Some(omega_index as f64 / (eo as f64).exp2());
+                    let a0 = d_get(&mut m.amplitude, &mut d, 1 << 40)?;
+                    let phase = d.direct(phase_bits(class))?;
+                    (class, omega_index, a0, phase)
+                }
+            };
             let gradient_index = if duration > 0 {
-                bits.get_signed(wg)?
+                let g = unsigned(d_get(
+                    &mut m.gradient[usize::from(continued)],
+                    &mut d,
+                    2 * MAX_INDEX,
+                )?);
+                if g.unsigned_abs() >= MAX_INDEX {
+                    return Err(corrupt());
+                }
+                g
             } else {
                 0
             };
-            let a0_index = bits.get(w_amplitude)?;
-            let a1_index = match envelope {
-                Envelope::Linear => bits.get(w_amplitude)?,
-                _ => a0_index,
+            let a1_index = if envelope == Envelope::Linear {
+                let a1 = a0_index as i64 + unsigned(d_get(&mut m.amplitude_end, &mut d, 1 << 41)?);
+                u64::try_from(a1).map_err(|_| corrupt())?
+            } else {
+                a0_index
             };
-            let phase_index = bits.get(phase_bits(class))?;
-            list.push(Member {
+            group.members.push(Member {
                 class,
-                fade_in,
+                fade_in: !continued,
                 fade_out,
                 omega_index,
                 gradient_index,
@@ -563,18 +808,27 @@ pub(super) fn parse(payload: &[u8], len: usize) -> Result<Gradients, Error> {
                 phase_index,
             });
         }
-        groups.push(Group {
-            start,
-            duration,
-            envelope,
-            members: list,
-        });
+        for (mi, member) in group.members.iter().enumerate() {
+            if !member.fade_out {
+                open.insert(start + duration, open_end(member, &group, hop, (gi, mi)));
+            }
+        }
+        groups.push(group);
     }
     Ok(Gradients {
         hop,
         precision,
         groups,
     })
+}
+
+/// An adaptive gamma value no larger than `limit`.
+fn d_get(model: &mut Gamma, d: &mut RangeDecoder, limit: u64) -> Result<u64, Error> {
+    let v = model.get(d)?;
+    if v > limit {
+        return Err(corrupt());
+    }
+    Ok(v)
 }
 
 /// Add every member to `out` (sample n = start*hop + t): the quadratic phase over
@@ -637,5 +891,90 @@ pub(super) fn render(gradients: &Gradients, out: &mut [f64]) {
                 out[n as usize] += a * angle.cos();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Links = Vec<Vec<Option<(usize, usize)>>>;
+
+    /// Three tracks of four segments each, every continuation starting exactly
+    /// where its predecessor ends (rounded to its own grid).
+    fn tracks(hop: usize) -> (Vec<Group>, Links) {
+        let mut groups: Vec<Group> = Vec::new();
+        let mut links = Vec::new();
+        for k in 0..4 {
+            let mut members = Vec::new();
+            let mut group_links = Vec::new();
+            for (t, &f) in [0.05f64, 0.2, 0.7].iter().enumerate() {
+                let class = 6 + t as u32;
+                let duration = 3;
+                let (omega_index, phase_index, a0_index, link) = if k == 0 {
+                    let eo = omega_exponent(class, duration, hop);
+                    ((f * (eo as f64).exp2()) as u64, 17 + t as u64, 90, None)
+                } else {
+                    let g = &groups[k - 1];
+                    let key = (k - 1, t);
+                    let end = open_end(&g.members[t], g, hop, key);
+                    let (omega, phase) = predicted(&end, class, duration, hop);
+                    (omega, phase, end.amplitude_index, Some(key))
+                };
+                members.push(Member {
+                    class,
+                    fade_in: k == 0,
+                    fade_out: k == 3,
+                    omega_index,
+                    gradient_index: 5 - 3 * t as i64,
+                    a0_index,
+                    a1_index: a0_index,
+                    phase_index,
+                });
+                group_links.push(link);
+            }
+            groups.push(Group {
+                start: 3 * k,
+                duration: 3,
+                envelope: Envelope::Constant,
+                members,
+            });
+            links.push(group_links);
+        }
+        (groups, links)
+    }
+
+    #[test]
+    fn linked_members_round_trip_and_cost_less_than_new_ones() {
+        let hop = 256;
+        let (groups, links) = tracks(hop);
+        let bytes = pack(hop, 2.0, &groups, &links).unwrap();
+        let parsed = parse(&bytes, 1 << 16).unwrap();
+        assert_eq!(parsed.groups, groups);
+        // The same parameters with every member coded as a new track.
+        let unlinked: Vec<Group> = groups
+            .iter()
+            .map(|g| Group {
+                members: g
+                    .members
+                    .iter()
+                    .map(|m| Member {
+                        fade_in: true,
+                        fade_out: true,
+                        ..*m
+                    })
+                    .collect(),
+                ..g.clone()
+            })
+            .collect();
+        let none: Links = links.iter().map(|l| vec![None; l.len()]).collect();
+        let fresh = pack(hop, 2.0, &unlinked, &none).unwrap();
+        assert_eq!(parse(&fresh, 1 << 16).unwrap().groups, unlinked);
+        assert!(
+            bytes.len() + 12 < fresh.len(),
+            "{} vs {}",
+            bytes.len(),
+            fresh.len()
+        );
     }
 }

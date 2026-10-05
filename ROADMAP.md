@@ -110,9 +110,9 @@ circle curves (`analog`); the component divider, equalizer and extrusion
 (`bands`); the SWL2 layered coder (`layered`, byte layout in `docs/SWL2.md`): LPC
 correction up to order 32 with the layers as per-block-gain side information,
 followed by sign-sign LMS stages of 1024, 256 and 16 taps (stages used per block),
-frequency-gradient groups with header-declared field widths, SinWhisky anchors at
-dynamic positions, a parametric mode, and `encode_auto` choosing stereo mode,
-layers, bands, precisions and block size by exact coded size. Real-file runs via
+range-coded frequency-gradient groups, SinWhisky anchors at dynamic positions,
+a parametric mode, segments with key frames, and `encode_auto` choosing stereo
+mode, layers, bands, precisions and block size by exact coded size per segment. Real-file runs via
 `test_music.sh quick|divide|eq|extrude|compress [--search full]`.
 
 Measured on three 5 s excerpts (`docs/experiments/swl2-nlms-beethoven-20261005.json`):
@@ -124,25 +124,49 @@ not pay on loud passages (LPC already removes the tonal energy) but gradients
 saved 16.9% at tolerance 128 and 1.8% at 16 on the quiet 180 s excerpt.
 Parametric streams need more bytes than the correction layer at comparable SNR.
 
-1. Stronger correction coding: inter-channel prediction for stereo (a cascade
-   stage fed by the other channel), bias cancellation (a stage-0 sign
-   predictor), context mixing for the indices; faster lossy cascade trials
-   (they rerun the stages per choice) and a SIMD dot product.
-2. Lossy prediction: noise feedback/shaping and predictors fitted on the
+Version 4 (`docs/experiments/swl2-v4-beethoven-20261005.json`, full search):
+lossless 13.3-15.1% smaller than FLAC, and against version 3 1.3-1.9% smaller
+lossless, 1.6-2.5% at tolerance 16, 1.3-8.7% at 128, parametric streams 30-42%
+at the same SNR. Variants were screened with `examples/swl2_bench.rs`. It
+kept: two-rate 12-bit probabilities and two modelled bits below the gamma
+leading one; LPC candidates at 12- and 9-bit precision, the previous block's
+predictor (one bit) or coefficient differences; cascade trials for the best
+LPC of order <=2 and of order 3..=8 besides the two best (a short LPC that the
+stages complete is often cheapest; chosen orders fell from about 20 to 2-8); a block-size walk from 2^13; range-coded gradient groups with
+continuing tracks predicted from their predecessors' ends (-34% gradient bytes
+at equal render) and range-coded anchors (-40%); segments with key and
+continuation frames and `decode_from`. Tried and discarded (worse or within
++-0.05%): half-octave index contexts, other running-mean rates, zero-run
+contexts, a third modelled bit, warm-start probability rates, a cross-channel
+LMS stage on the first channel's innovations including future samples (the
+excerpts' residuals correlate at about 0.12; at most -0.05% lossless for 30%
+more time), bias cancellation, stages of 2048/32/128 taps, a third cascade
+candidate, a gradient predicted from the predecessor, and line or circle guesses
+for anchors on gradient remainders (zero wins: anchors alternate).
+
+1. Stronger correction coding: context mixing for the indices; faster lossy
+   cascade trials (they rerun the stages per choice) and a SIMD dot product;
+   inter-channel prediction again on material with correlated channels.
+2. A key frame every 1.5 s costs 0.3-0.8% losslessly, 0.5-1.2% at tolerance 16
+   and 1.2-5.0% at 128 (fast search), mostly the 1024-tap stage relearning: cheaper warm-up after a key, and gradient
+   tracks that continue across continuation segments (cut tracks made
+   per-segment layer choice 3.6% worse at tolerance 128 on the quiet excerpt,
+   while it saved 3.1% at tolerance 16).
+3. Lossy prediction: noise feedback/shaping and predictors fitted on the
    reconstructed (noisy) history; the gradients pay where this history is noisy.
-3. Gradient groups: breakpoint thinning, Hermite gradients (paper 4.2-4.3),
+4. Gradient groups: breakpoint thinning, Hermite gradients (paper 4.2-4.3),
    harmonic groups (shared fundamental), cheaper per-member classes.
-4. SinWhisky anchors: optimize anchor values ("best circles") instead of taking
+5. SinWhisky anchors: optimize anchor values ("best circles") instead of taking
    samples; only parametric/lossy use is plausible after Table 3.
-5. A perceptual error criterion and blind listening, the only setting in which
+6. A perceptual error criterion and blind listening, the only setting in which
    parametric streams could pay; not measurable from bytes and SNR alone.
-6. Speed: `encode_auto --search full` takes ~50 s per 5 s stereo stream and
+7. Speed: `encode_auto --search full` takes ~50 s per 5 s stereo stream and
    tolerance (tone analysis and anchor placement dominate); reuse one analysis
    across tolerances.
-7. Divider selectivity on synthetic tones against spectral masking and a
+8. Divider selectivity on synthetic tones against spectral masking and a
    Linkwitz-Riley crossover; banded fit against the clustered pursuit; a banded
    joint Gauss-Newton; rotations per second of determined curves against band edge.
-8. More recordings and genres before any general compression claim.
+9. More recordings and genres before any general compression claim.
 
 ## Earlier geometry-first focus (controls)
 

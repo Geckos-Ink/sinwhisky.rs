@@ -12,8 +12,11 @@
 //! autocorrelation, with the quantization noise of the history added to its
 //! zero lag in lossy streams, are quantized to at most 15-bit integers with a
 //! per-block shift, and run in integer arithmetic, so the decoder is exact on
-//! every platform. Indices are coded with adaptive contexts selected by a
-//! running mean of recent magnitudes.
+//! every platform. A block can repeat the previous block's predictor (one bit)
+//! or send coefficients as differences from it. Indices are coded with adaptive
+//! contexts selected by a running mean of recent magnitudes. Everything adaptive
+//! (probabilities, the predictor, the stages and the last samples) can continue
+//! into the next segment of the stream (`State`).
 //!
 //! Optionally (a header flag), a cascade of sign-sign LMS stages of 1024, 256 and
 //! 16 taps follows the LPC, as in Monkey's Audio: each stage predicts the
@@ -21,12 +24,14 @@
 //! adapts after every sample, in integer arithmetic. The stages always adapt;
 //! each block says how many of them (0..=3) add their prediction, chosen by the
 //! actual coded size among the best LPC candidates.
-use super::coder::{corrupt, signed_width, Gamma, RangeDecoder, RangeEncoder, PROB_INIT};
+use super::coder::{corrupt, signed_width, Gamma, Prob, RangeDecoder, RangeEncoder};
 use crate::{buffer, Error};
 
 const ORDERS: [usize; 10] = [0, 1, 2, 4, 8, 12, 16, 20, 24, 32];
 const MAX_ORDER: usize = 32;
 const PRECISION: u32 = 15;
+/// Coarser coefficient precisions tried for every exactly coded order.
+const COARSER: [u32; 2] = [12, 9];
 const CONTEXTS: usize = 24;
 /// Gains of the layer prediction, in quarters.
 const GAINS: u64 = 5;
@@ -38,6 +43,8 @@ const LIMIT: i64 = 1 << 40;
 const STAGES: [(usize, u32); 3] = [(1024, 15), (256, 13), (16, 11)];
 /// LPC candidates (by exact size) tried again with the cascade.
 const CASCADE_CANDIDATES: usize = 2;
+/// The best candidate of at most this order is tried with the cascade too.
+const SHORT_ORDER: usize = 2;
 /// Stage histories are saturated to this magnitude, weights to `WEIGHT_LIMIT`.
 const HISTORY_LIMIT: i64 = (1 << 24) - 1;
 const WEIGHT_LIMIT: i32 = 1 << 20;
@@ -46,19 +53,21 @@ const WINDOW: usize = 512;
 
 #[derive(Clone)]
 struct Model {
-    zero: [u16; CONTEXTS],
-    sign: [u16; CONTEXTS],
+    zero: [Prob; CONTEXTS],
+    sign: [Prob; CONTEXTS],
     magnitude: Vec<Gamma>,
     /// About 16 times the running mean of |index|.
     mean: u64,
+    predictor: PredictorModel,
 }
 impl Model {
     fn new() -> Self {
         Self {
-            zero: [PROB_INIT; CONTEXTS],
-            sign: [PROB_INIT; CONTEXTS],
+            zero: [Prob::NEW; CONTEXTS],
+            sign: [Prob::NEW; CONTEXTS],
             magnitude: vec![Gamma::new(); CONTEXTS],
             mean: 16,
+            predictor: PredictorModel::new(),
         }
     }
     fn context(&self) -> usize {
@@ -124,44 +133,125 @@ impl Predictor {
         };
         p.clamp(-LIMIT, LIMIT)
     }
-    fn write(&self, e: &mut RangeEncoder) {
-        e.direct(self.coefficients.len() as u64, 6);
-        if self.coefficients.is_empty() {
-            return;
-        }
-        let width = self
-            .coefficients
+    /// Coefficients of `previous` aligned with this predictor's: zero beyond
+    /// its order. Only meaningful when the shifts agree.
+    fn delta_from(&self, previous: &Predictor) -> Option<Vec<i64>> {
+        (self.shift == previous.shift && !self.coefficients.is_empty()).then(|| {
+            self.coefficients
+                .iter()
+                .enumerate()
+                .map(|(i, &c)| c - previous.coefficients.get(i).copied().unwrap_or(0))
+                .collect()
+        })
+    }
+    fn width(&self) -> u32 {
+        self.coefficients
             .iter()
             .map(|&c| signed_width(c))
             .max()
             .unwrap_or(1)
-            .max(1);
-        e.direct(u64::from(self.shift), 5);
-        e.direct(u64::from(width), 5);
-        for &c in &self.coefficients {
-            e.direct((c as u64) & ((1u64 << width) - 1), width);
+            .max(1)
+    }
+}
+
+/// Signed to unsigned: 0, -1, 1, -2, ... to 0, 1, 2, 3, ...
+fn zigzag(v: i64) -> u64 {
+    ((v << 1) ^ (v >> 63)) as u64
+}
+fn unzigzag(v: u64) -> i64 {
+    (v >> 1) as i64 ^ -((v & 1) as i64)
+}
+
+/// Adaptive coding of a block's predictor relative to the previous block's: a
+/// "same as before" bit; otherwise order and shift, then either deltas from the
+/// previous coefficients (adaptive gamma, same shift only) or every coefficient
+/// in a declared width (a key predictor).
+#[derive(Clone)]
+struct PredictorModel {
+    reuse: Prob,
+    delta: Prob,
+    coefficients: Gamma,
+}
+impl PredictorModel {
+    fn new() -> Self {
+        Self {
+            reuse: Prob::NEW,
+            delta: Prob::NEW,
+            coefficients: Gamma::new(),
         }
     }
-    fn read(d: &mut RangeDecoder) -> Result<Self, Error> {
+    fn put(&mut self, e: &mut RangeEncoder, p: &Predictor, previous: &Predictor) {
+        let same = p == previous;
+        e.bit(&mut self.reuse, same);
+        if same {
+            return;
+        }
+        e.direct(p.coefficients.len() as u64, 6);
+        if p.coefficients.is_empty() {
+            return;
+        }
+        e.direct(u64::from(p.shift), 5);
+        let width = p.width();
+        let key_bits = 5 + p.coefficients.len() as u64 * u64::from(width);
+        let delta = p.delta_from(previous).filter(|d| {
+            let bits: u64 = d
+                .iter()
+                .map(|&v| 2 * u64::from(64 - (zigzag(v) + 1).leading_zeros()) - 1)
+                .sum();
+            bits < key_bits
+        });
+        if previous.shift == p.shift {
+            e.bit(&mut self.delta, delta.is_some());
+        }
+        match delta {
+            Some(d) => {
+                for v in d {
+                    self.coefficients.put(e, zigzag(v));
+                }
+            }
+            None => {
+                e.direct(u64::from(width), 5);
+                for &c in &p.coefficients {
+                    e.direct((c as u64) & ((1u64 << width) - 1), width);
+                }
+            }
+        }
+    }
+    fn get(&mut self, d: &mut RangeDecoder, previous: &Predictor) -> Result<Predictor, Error> {
+        if d.bit(&mut self.reuse)? {
+            return Ok(previous.clone());
+        }
         let order = d.direct(6)? as usize;
         if order > MAX_ORDER {
             return Err(corrupt());
         }
         if order == 0 {
-            return Ok(Self::none());
+            return Ok(Predictor::none());
         }
         let shift = d.direct(5)? as u32;
-        let width = d.direct(5)? as u32;
-        if !(1..=PRECISION).contains(&width) {
-            return Err(corrupt());
-        }
+        let limit = 1i64 << PRECISION;
         let mut coefficients = Vec::with_capacity(order);
-        for _ in 0..order {
-            let v = d.direct(width)?;
-            let s = 64 - width;
-            coefficients.push(((v << s) as i64) >> s);
+        if previous.shift == shift && d.bit(&mut self.delta)? {
+            for i in 0..order {
+                let base = previous.coefficients.get(i).copied().unwrap_or(0);
+                let c = base + unzigzag(self.coefficients.get(d)?.min(1 << 40));
+                if c.abs() >= limit {
+                    return Err(corrupt());
+                }
+                coefficients.push(c);
+            }
+        } else {
+            let width = d.direct(5)? as u32;
+            if !(1..=PRECISION).contains(&width) {
+                return Err(corrupt());
+            }
+            for _ in 0..order {
+                let v = d.direct(width)?;
+                let s = 64 - width;
+                coefficients.push(((v << s) as i64) >> s);
+            }
         }
-        Ok(Self {
+        Ok(Predictor {
             coefficients,
             shift,
         })
@@ -220,14 +310,14 @@ fn analyse(block: &[i64], noise: f64) -> Vec<Vec<f64>> {
     out
 }
 
-fn quantize_coefficients(a: &[f64]) -> Predictor {
+fn quantize_coefficients(a: &[f64], precision: u32) -> Predictor {
     let largest = a.iter().fold(0.0f64, |m, v| m.max(v.abs()));
     if a.is_empty() || largest == 0.0 || !largest.is_finite() {
         return Predictor::none();
     }
     let top = largest.log2().floor() as i64 + 1;
-    let shift = (i64::from(PRECISION) - 1 - top).clamp(0, 31) as u32;
-    let limit = (1i64 << (PRECISION - 1)) - 1;
+    let shift = (i64::from(precision) - 1 - top).clamp(0, 31) as u32;
+    let limit = (1i64 << (precision - 1)) - 1;
     let coefficients = a
         .iter()
         .map(|&v| ((v * (1u64 << shift) as f64).round() as i64).clamp(-limit, limit))
@@ -366,8 +456,52 @@ fn estimate(q: &[i64]) -> f64 {
         .sum()
 }
 
+/// What a continuation segment inherits from the previous one: the adaptive
+/// index model, the LMS stages, the last predictor and the last `MAX_ORDER`
+/// reconstructed samples with their layer predictions. A key segment starts
+/// from `State::new()`.
+#[derive(Clone)]
+pub(super) struct State {
+    model: Model,
+    stages: Option<Cascade>,
+    previous: Predictor,
+    restored: Vec<i64>,
+    layer: Vec<i64>,
+}
+impl State {
+    pub(super) fn new() -> Self {
+        Self {
+            model: Model::new(),
+            stages: None,
+            previous: Predictor::none(),
+            restored: Vec::new(),
+            layer: Vec::new(),
+        }
+    }
+    /// The state after a segment: `restored` and `layer` include the
+    /// inherited history.
+    fn after(
+        model: Model,
+        stages: Option<Cascade>,
+        previous: Predictor,
+        restored: &[i64],
+        layer: &[i64],
+    ) -> Self {
+        let tail = |v: &[i64]| v[v.len().saturating_sub(MAX_ORDER)..].to_vec();
+        Self {
+            model,
+            stages,
+            previous,
+            restored: tail(restored),
+            layer: tail(layer),
+        }
+    }
+}
+
 pub(super) struct Correction {
     pub payload: Vec<u8>,
+    /// The state the next continuation segment starts from.
+    pub state: State,
     pub reconstructed: Vec<i64>,
     /// Nonzero indices: the samples whose difference exceeded the tolerance.
     pub written: usize,
@@ -388,6 +522,7 @@ pub(super) fn encode(
     tolerance: u32,
     block_exponent: u32,
     cascade: bool,
+    state: State,
 ) -> Correction {
     let step = 2 * i64::from(tolerance) + 1;
     let noise = if tolerance > 0 {
@@ -396,30 +531,46 @@ pub(super) fn encode(
         0.0
     };
     let block = 1usize << block_exponent;
-    let zeros;
-    let (layer, gains) = match layer {
-        Some(l) => (l, 0..GAINS),
-        None => {
-            zeros = vec![0i64; x.len()];
-            (&zeros[..], 4..GAINS)
-        }
-    };
-    let has_layer = gains.start == 0;
-    let header = |e: &mut RangeEncoder, gain: u64, predictor: &Predictor, uses: usize| {
+    let has_layer = layer.is_some();
+    let gains = if has_layer { 0..GAINS } else { 4..GAINS };
+    // The inherited history comes first: samples before `inherited` are never
+    // coded, only read as history.
+    let inherited = state.restored.len();
+    let mut extended = vec![0i64; inherited];
+    extended.extend_from_slice(x);
+    let x = &extended[..];
+    let mut layer_extended = state.layer.clone();
+    match layer {
+        Some(l) => layer_extended.extend_from_slice(l),
+        None => layer_extended.resize(x.len(), 0),
+    }
+    let layer = &layer_extended[..];
+    let header = |e: &mut RangeEncoder,
+                  model: &mut Model,
+                  previous: &Predictor,
+                  gain: u64,
+                  predictor: &Predictor,
+                  uses: usize| {
         if has_layer {
             e.direct(gain, 3);
         }
-        predictor.write(e);
+        model.predictor.put(e, predictor, previous);
         if cascade {
             e.direct(uses as u64, 2);
         }
     };
     let mut e = RangeEncoder::new();
-    let mut model = Model::new();
-    let mut stages = cascade.then(Cascade::new);
+    let mut model = state.model;
+    let mut stages = if cascade {
+        Some(state.stages.unwrap_or_else(Cascade::new))
+    } else {
+        None
+    };
     let mut restored: Vec<i64> = Vec::with_capacity(x.len());
+    restored.extend_from_slice(&state.restored);
+    let mut previous = state.previous;
     let (mut written, mut orders, mut gain_sum, mut used, mut blocks) = (0, 0, 0, 0, 0);
-    let mut start = 0;
+    let mut start = inherited;
     while start < x.len() {
         let count = block.min(x.len() - start);
         let tail = restored.len().saturating_sub(MAX_ORDER);
@@ -450,7 +601,14 @@ pub(super) fn encode(
         let size = |gain: u64, predictor: &Predictor, uses: usize, q: &[i64]| {
             let mut trial = RangeEncoder::new();
             let mut trial_model = model.clone();
-            header(&mut trial, gain, predictor, uses);
+            header(
+                &mut trial,
+                &mut trial_model,
+                &previous,
+                gain,
+                predictor,
+                uses,
+            );
             for &v in q {
                 trial_model.put(&mut trial, v);
             }
@@ -468,7 +626,7 @@ pub(super) fn encode(
                 .iter()
                 .filter(|&&o| o < predictors.len())
                 .map(|&o| {
-                    let predictor = quantize_coefficients(&predictors[o]);
+                    let predictor = quantize_coefficients(&predictors[o], PRECISION);
                     let q = run(gain, &predictor, None, 0, None).q;
                     let bits = estimate(&q) + 16.0 + 15.0 * predictor.coefficients.len() as f64;
                     (bits, predictor)
@@ -477,10 +635,21 @@ pub(super) fn encode(
             ranked.sort_by(|a, b| a.0.total_cmp(&b.0));
             // Without a layer there is one gain: code every order exactly.
             let exact = if has_layer { EXACT } else { ORDERS.len() };
-            for (_, predictor) in ranked.into_iter().take(exact) {
-                let outcome = run(gain, &predictor, None, 0, None);
-                let bytes = size(gain, &predictor, 0, &outcome.q);
-                candidates.push((bytes, gain, predictor, outcome));
+            // The previous block's predictor costs one bit.
+            let reuse = (!previous.coefficients.is_empty()).then(|| (0.0, previous.clone()));
+            for (_, predictor) in ranked.into_iter().take(exact).chain(reuse) {
+                let order = predictor.coefficients.len();
+                let reused = predictor == previous;
+                let mut versions = vec![predictor];
+                // Coarser coefficients: fewer header bits for a little accuracy.
+                for &precision in COARSER.iter().filter(|_| order > 0 && !reused) {
+                    versions.push(quantize_coefficients(&predictors[order], precision));
+                }
+                for predictor in versions {
+                    let outcome = run(gain, &predictor, None, 0, None);
+                    let bytes = size(gain, &predictor, 0, &outcome.q);
+                    candidates.push((bytes, gain, predictor, outcome));
+                }
             }
         }
         candidates.sort_by_key(|c| c.0);
@@ -494,9 +663,21 @@ pub(super) fn encode(
                     best = Some((bytes, index, uses, outcome));
                 }
             };
-            for (index, (_, gain, predictor, _)) in
-                candidates.iter().enumerate().take(CASCADE_CANDIDATES)
-            {
+            // The best candidates, and the best short one, which the cascade
+            // may complete more cheaply than a long one.
+            let mut chosen: Vec<usize> = (0..candidates.len().min(CASCADE_CANDIDATES)).collect();
+            for range in [0..=SHORT_ORDER, SHORT_ORDER + 1..=8] {
+                if let Some(i) = candidates
+                    .iter()
+                    .position(|c| range.contains(&c.2.coefficients.len()))
+                {
+                    if !chosen.contains(&i) {
+                        chosen.push(i);
+                    }
+                }
+            }
+            for index in chosen {
+                let (_, gain, predictor, _) = &candidates[index];
                 if step == 1 {
                     // Lossless: the reconstruction does not depend on the stages
                     // used, so one run gives every alternative.
@@ -537,8 +718,9 @@ pub(super) fn encode(
                 (gain, predictor, 0, outcome)
             }
         };
-        header(&mut e, gain, &predictor, uses);
+        header(&mut e, &mut model, &previous, gain, &predictor, uses);
         orders += predictor.coefficients.len();
+        previous = predictor.clone();
         gain_sum += gain;
         used += uses;
         blocks += 1;
@@ -558,7 +740,8 @@ pub(super) fn encode(
     let blocks = blocks.max(1) as f64;
     Correction {
         payload,
-        reconstructed: restored,
+        state: State::after(model, stages, previous, &restored, layer),
+        reconstructed: restored.split_off(inherited),
         written,
         mean_order: orders as f64 / blocks,
         mean_gain: if has_layer {
@@ -630,26 +813,42 @@ fn run_shifted(
 }
 
 /// Decode `len` samples given the rounded layer prediction (zeros if none).
-pub(super) fn decode(payload: &[u8], layer: &[i64], tolerance: u32) -> Result<Vec<i64>, Error> {
+pub(super) fn decode(
+    payload: &[u8],
+    layer: &[i64],
+    tolerance: u32,
+    state: State,
+) -> Result<(Vec<i64>, State), Error> {
     let step = 2 * i64::from(tolerance) + 1;
     let (&head, data) = payload.split_first().ok_or_else(corrupt)?;
     let exponent = head & 0x0f;
     let has_layer = head & 0x80 != 0;
-    let mut stages = (head & 0x10 != 0).then(Cascade::new);
     if !(8..=15).contains(&exponent) || head & 0x60 != 0 {
         return Err(corrupt());
     }
+    let mut stages = if head & 0x10 != 0 {
+        Some(state.stages.unwrap_or_else(Cascade::new))
+    } else {
+        None
+    };
+    let inherited = state.restored.len();
+    let mut layer_extended = state.layer;
+    layer_extended.extend_from_slice(layer);
+    let layer = &layer_extended[..];
     let len = layer.len();
     let block = 1usize << exponent;
     let mut d = RangeDecoder::new(data)?;
-    let mut model = Model::new();
+    let mut model = state.model;
+    let mut previous = state.previous;
     let mut restored: Vec<i64> = buffer(len)?;
+    restored.extend_from_slice(&state.restored);
     while restored.len() < len {
         let gain = if has_layer { d.direct(3)? } else { 4 };
         if gain >= GAINS {
             return Err(corrupt());
         }
-        let predictor = Predictor::read(&mut d)?;
+        let predictor = model.predictor.get(&mut d, &previous)?;
+        previous = predictor.clone();
         let uses = if stages.is_some() {
             d.direct(2)? as usize
         } else {
@@ -678,5 +877,6 @@ pub(super) fn decode(payload: &[u8], layer: &[i64], tolerance: u32) -> Result<Ve
             restored.push(v);
         }
     }
-    Ok(restored)
+    let state = State::after(model, stages, previous, &restored, layer);
+    Ok((restored.split_off(inherited), state))
 }

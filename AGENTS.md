@@ -114,10 +114,14 @@ code. Optional NumPy/FFmpeg research tools must not become library dependencies.
   decode needs no source and reproduces the encoder's samples; every sample is
   within `tolerance` (0 = lossless) unless the stream is `PARAMETRIC` (no
   correction chunk, error measured as SNR). The correction chunk (LPC and the
-  LMS cascade) is integer arithmetic; gradient/anchor renders are binary64 (same-platform exactness only).
-  `encode_auto` keeps a layer only if the exact coded size shrinks. Stereo
+  LMS cascade) is integer arithmetic; gradient/anchor renders are binary64 (same-platform exactness only),
+  their parsing uses only + - * / and sqrt. A stream is segments; a key segment
+  restarts all adaptive state and `decode_from` starts there; a continuation
+  inherits only the correction `State`. `encode_auto` keeps a layer only if the
+  exact coded size of the segment shrinks (greedy, segment by segment). Stereo
   decorrelation only when lossless. Sub-half-bin tones are DC (ill-conditioned
-  sine atom otherwise). Protected by `tests/bands.rs` and `tests/layered.rs`.
+  sine atom otherwise). Protected by `tests/bands.rs`, `tests/layered.rs` and
+  the unit test in `src/layered/gradients.rs`.
 - **Frame coverage/error:** [ResearchFrame::from_analysis](src/codec.rs) partitions
   source samples into nonempty half-open ranges. Every predicted source sample
   is checked against tolerance. Decode has no dependency on original PCM.
@@ -143,9 +147,10 @@ EQ/compression consumer: samples → `ToneAnalysis` (circle curve, Hann windows
 T/hop T/2, |FAFT| maxima below `upper`, `fit_banded` + significance prune +
 `fit_refined`) → `divide` (tones by crossover weight; residual line curve through
 zero-phase Butterworth, complementary) → `equalize`/`extrude`; or →
-`layered::encode_auto` (stereo mode; per channel optional gradient groups,
+`layered::encode_auto` (per segment: stereo mode; per channel optional gradient groups,
 optional SinWhisky anchors, then the LPC correction chunk with the layers as
-side information and the LMS cascade after the LPC; every choice by exact coded size) → SWL2 bytes → `decode`.
+side information and the LMS cascade after the LPC; every choice by exact coded size) → SWL2 bytes → `decode`
+(or `decode_from` a key segment).
 `examples/eq_audio.rs` runs it on PCM16 for `test_music.sh quick|divide|eq|extrude|compress`.
 
 Ports consumer (outside the crate): `examples/port_vectors` → `ports/fixtures/vectors.json`
@@ -389,36 +394,58 @@ cost 100-330 ms per window on real music in development runs.
 
 ### [src/layered/](src/layered/mod.rs) and [docs/SWL2.md](docs/SWL2.md)
 
-Experimental SWL2 stream, specified byte by byte in `docs/SWL2.md` (keep the two
-in sync; bump the version for any layout change). `mod.rs`: 16-byte header, per
-channel typed chunks, stereo transforms (FLAC's four, lossless only), `encode`
-(fixed `StreamConfig`), `encode_auto` (search with `Trial` log), `decode`,
-`PARAMETRIC`. `coder.rs`: LZMA-style range coder, adaptive gamma, MSB-first bit
-packer. `correction.rs`: per block gain for the layer prediction (quarters) and
-LPC order (0..32, Levinson-Durbin on Tukey autocorrelation, quantization noise on
-the zero lag when lossy, 15-bit integer coefficients), chosen by trial coding;
-then (header flag, `ChannelConfig::cascade`) sign-sign LMS stages of 1024/256/16
-taps with Monkey's Audio steps, adapting every sample on the reconstructed LPC
+Experimental SWL2 stream (version 4), specified byte by byte in `docs/SWL2.md`
+(keep the two in sync; bump the version for any layout change). `mod.rs`:
+16-byte header, length-prefixed segments (key flag, stereo code, per channel
+typed chunks), stereo transforms (FLAC's four, lossless only), `encode` (fixed
+`StreamConfig` of `SegmentConfig`s; `StreamConfig::single` for one segment),
+`encode_auto` (greedy per segment, `key_interval`, search with `Trial` log; the
+chosen trial's coded channel is kept, not re-encoded), `decode`, `decode_from`,
+`PARAMETRIC`. `coder.rs`: LZMA-style range coder with two-rate 12-bit
+probabilities, adaptive gamma modelling two bits below the leading one.
+`correction.rs`: per block gain for the layer prediction (quarters) and LPC
+predictor (orders 0..32, Levinson-Durbin on Tukey autocorrelation, quantization
+noise on the zero lag when lossy, 15/12/9-bit integer coefficients, or the
+previous block's; coded as "same", deltas or key), chosen by trial coding; then
+(header flag, `ChannelConfig::cascade`) sign-sign LMS stages of 1024/256/16 taps
+with Monkey's Audio steps, adapting every sample on the reconstructed LPC
 residual whether used or not; each block codes how many stages it adds (0..3),
-tried on the two best LPC candidates (lossless: one run gives every choice; the
-winning trial's state is kept, not recomputed); running-magnitude contexts. `gradients.rs`: track linking, quadratic-phase
-segments (frequency gradient), groups sharing start/duration/volume function,
-header-declared field widths, amplitude-class quanta, cross-faded joints.
-`anchors.rs`: greedy dynamic-gap anchors, circles through anchor triplets with
-quadratic angle in time, raised-cosine cross-fade; optional zero-phase low-band
-target. Bounded parsing and malformed-stream rejection are tested, not fuzzed.
+tried on the two best LPC candidates and the best of order <=2 and 3..=8
+(lossless: one run gives every choice; the winning trial's state is kept, not
+recomputed); running-magnitude contexts; `State` carries probabilities,
+predictor, stages and the last 32 samples into a continuation segment.
+`gradients.rs`: track linking, quadratic-phase segments (frequency gradient),
+groups sharing start/duration/volume function, amplitude-class quanta,
+cross-faded joints; range coded, continuing members predicted from their
+predecessor's end through the open-track list (rank by end frequency), new
+members as frequency steps. `anchors.rs`: greedy dynamic-gap anchors, circles
+through anchor triplets with quadratic angle in time, raised-cosine cross-fade;
+optional zero-phase low-band target; range-coded gaps and value residuals from
+the best of four guesses (zero wins on gradient remainders). Bounded parsing and
+malformed-stream rejection are tested, not fuzzed.
+
+### [examples/swl2_bench.rs](examples/swl2_bench.rs)
+
+Research harness for SWL2 coder variants: `encode_auto` on raw s16le stereo files
+per tolerance (threads per file and tolerance; `--full`, `--cascade off`,
+`--segment S --key K`), every decode and bound checked, totals printed; or
+`--parametric` (one tone analysis per channel, gradient groups at p 16/64 with and
+without anchors: same parameters, same render, so bytes compare description
+coders at equal SNR). Writes nothing; inputs stay outside the repository.
 
 ### [examples/eq_audio.rs](examples/eq_audio.rs)
 
 Reads interleaved s16le PCM, runs `divide`/`eq`/`extrude`/`compress`/`all` per
 channel, writes PCM16 WAVs, SWL2 streams (`encode_auto`, `--search fast|full`,
-`--cascade on|off`, optional `--parametric P [--parametric-anchors T]`) and
+`--cascade on|off`, `--segment S --key K`, optional `--parametric P [--parametric-anchors T]`) and
 `report.json` into a new
 directory outside the repository (checked), verifies every decode and error
 bound, and prints the aggregate report. Timings are wall-clock. Published
 aggregates: `docs/experiments/eq-compression-beethoven-20261005.json` (SWL1),
-`docs/experiments/swl2-beethoven-20261005.json` (LPC only, `--cascade off`) and
-`docs/experiments/swl2-nlms-beethoven-20261005.json` (LMS cascade).
+`docs/experiments/swl2-beethoven-20261005.json` (LPC only, `--cascade off`),
+`docs/experiments/swl2-nlms-beethoven-20261005.json` (LMS cascade, version 3) and
+`docs/experiments/swl2-v4-beethoven-20261005.json` (version 4, with segment and
+key-frame runs).
 
 ### [examples/pursuit_bench.rs](examples/pursuit_bench.rs)
 
@@ -799,7 +826,7 @@ extent, and frame-coverage tests detect these errors.
 | `fit_banded`, `fit_refined` | [banded fit](src/faft/banded.rs) | Two-way banded joint fit; valid bound under truncation |
 | `AnalogFilter`, `SpiralCurve` | [analog](src/analog.rs) | Exact rational filtering of circle/spiral curves, zero-phase passes |
 | `ToneAnalysis`, `divide`, `equalize`, `extrude` | [bands](src/bands.rs) | Complete band division by fitted tones and complementary residual filters |
-| `layered::encode`/`encode_auto`/`decode` (SWL2) | [layered](src/layered/mod.rs), [spec](docs/SWL2.md) | Experimental closed-loop coder; error <= tolerance (or parametric); automatic choices by exact size; not a stable format |
+| `layered::encode`/`encode_auto`/`decode`/`decode_from` (SWL2) | [layered](src/layered/mod.rs), [spec](docs/SWL2.md) | Experimental closed-loop coder; error <= tolerance (or parametric); segments with key frames; automatic choices by exact size; not a stable format |
 | `test_music.sh quick\|divide\|eq\|extrude\|compress` | [wrapper](test_music.sh), [eq_audio](examples/eq_audio.rs) | Real-file listening outputs and byte counts against FLAC |
 | `ResearchFrame`, `SegmentModel` | [src/codec.rs](src/codec.rs) | Experimental in-memory prediction only |
 | Periodic angular AFT | [src/aft.rs](src/aft.rs) | Continuous angular interpolant, explicit joins and closing interval |
@@ -831,6 +858,7 @@ cargo test --offline --test spectral
 cargo test --offline --test aft
 cargo test --offline --test bands
 cargo test --offline --test layered
+cargo test --offline --lib
 cargo fmt --check
 cargo clippy --offline --all-targets -- -D warnings
 cargo doc --offline --no-deps
@@ -942,7 +970,8 @@ inspect failures. Optional AFT/FAFT benchmark tools exist; no security/fuzz auto
 | Circle transforms / predictor DFT | `tests/spectral.rs` |
 | SWR1 byte decode/error/limits/Fourier/subarcs | Optional `tests/test_compression_lab.py` |
 | Banded fit = dense fit, exact filtering vs Runge-Kutta, zero-phase response, division completeness, tones whole, DC snap | `tests/bands.rs` |
-| SWL2 round trips with every layer and tolerance (cascade on and off), stereo modes, LPC on tones vs noise, cascade beyond the LPC's reach and ≤1% cost on noise, parametric mode, auto never worse than correction alone, malformed streams | `tests/layered.rs` |
+| SWL2 round trips with every layer and tolerance (cascade on and off), stereo modes, LPC on tones vs noise, cascade beyond the LPC's reach and ≤1% cost on noise, parametric mode, segments (continuation cheaper than key, per-segment stereo/layers, `decode_from` a key), auto never worse than correction alone, malformed streams | `tests/layered.rs` |
+| Gradient chunk: linked members round trip exactly and cost less than new ones | unit test in `src/layered/gradients.rs` |
 | EQ/compression paper: masked-edge leakage, two-way solve, filtered rotations, spirals, gradient tones | Optional `tools/eq_compression_checks.py` (standard library) |
 
 Known test gaps: SWR1 fuzzing/security and cross-platform rounding, other platforms,
@@ -980,20 +1009,24 @@ This initial unpublished API may evolve; document every behavior change.
   optional NumPy circle/subarc/Fourier lab with full byte/error measurements.
   Three short Beethoven excerpts show no material circle-specific coding gain.
 - **Known gaps:** uniform branch mismatch; no stable compression format, native
-  audio I/O, streaming, stereo coupling, perceptual validation, or cross-platform CI.
+  audio I/O, a streaming API (SWL2 segments and key frames make the format
+  streamable, but `encode_auto`/`decode` take whole buffers), perceptual
+  validation, or cross-platform CI.
 - **Planned:** see [ROADMAP.md](ROADMAP.md), especially sliding FAFT windows,
   continuous circle joins, peak-list completeness, off-grid/residual circle
   search, continuity, shared distortion allocation, geometry quantization, better residual
   coding, broader byte/error measurements and a separately validated FLT implementation.
   The equalization/compression draft ([paper](docs/PAPER_EQ_COMPRESSION.md)) has
   an implementation (banded fit, exact analog filters, divider/EQ/extrusion, SWL2
-  coder with LPC, an LMS cascade, gradient groups, SinWhisky anchors and automatic
-  choices). On three 5 s excerpts lossless SWL2 is 12.2-13.8% smaller than FLAC
-  (7.7-11.0% with LPC alone); the cascade saves 2.4-23.3% against LPC alone,
-  most at tolerance 128, for 1.6-3x the encoding time; gradient and anchor
-  layers paid only on a quiet passage with a tolerance (paper 6.2).
-- **SWL2 correction layer next:** inter-channel cascade stage, bias
-  cancellation, index context mixing, faster lossy cascade trials (see
+  coder with LPC, an LMS cascade, range-coded gradient groups and SinWhisky
+  anchors, segments with key frames, automatic choices). On three 5 s excerpts
+  lossless SWL2 version 4 is 13.3-15.1% smaller than FLAC (12.2-13.8% in
+  version 3, 7.7-11.0% with LPC alone); a key frame every 1.5 s costs 0.3-0.8%
+  lossless; parametric streams are 30-42% smaller than in version 3 at equal
+  SNR; gradient layers paid only on a quiet passage with a tolerance (paper 6.2).
+- **SWL2 next:** index context mixing, cheaper warm-up after key frames,
+  gradient tracks across continuation segments, faster lossy cascade trials
+  (cross-channel and bias stages were tried and did not pay; see
   [ROADMAP.md](ROADMAP.md)).
 
 ## Task start and handoff checklist

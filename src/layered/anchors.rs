@@ -15,8 +15,11 @@
 //! The encoder places anchors greedily: it starts from the ends (and every
 //! `max_gap` samples) and inserts the sample of largest error, re-evaluating only
 //! the four intervals whose circles change, until every interval is within the
-//! tolerance. The gaps between anchors are therefore dynamic.
-use super::coder::{corrupt, signed_width, width, BitReader, BitWriter, Bytes};
+//! tolerance. The gaps between anchors are therefore dynamic. Gaps and values
+//! are range coded, each value as a residual from a guess (zero, the previous
+//! value, the line or the SinWhisky circle through the last anchors) chosen by
+//! size; on what gradient groups leave, alternating extremes make zero best.
+use super::coder::{corrupt, Bytes, Gamma, Prob, RangeDecoder, RangeEncoder};
 use crate::Error;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
@@ -269,38 +272,184 @@ fn place(target: &[f64], config: &AnchorConfig) -> Vec<(usize, f64)> {
     anchors.into_iter().collect()
 }
 
-/// Place anchors on `target` and pack them. Header: u32 count, f32 step,
-/// u8 gap width, u8 value width; then the gaps minus one and the value indices,
-/// bit-packed.
+/// How an anchor value is predicted from the anchors before it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Guess {
+    Zero,
+    Previous,
+    /// The line through the last two anchors.
+    Line,
+    /// The SinWhisky circle through the last three anchors (aperture-scaled,
+    /// the branch of the last one), evaluated at the new position; the line
+    /// where it does not reach.
+    Circle,
+}
+const GUESSES: [Guess; 4] = [Guess::Zero, Guess::Previous, Guess::Line, Guess::Circle];
+
+/// Prediction of the value index at `t` from the earlier `(position, index)`
+/// pairs. Only additions, multiplications, divisions and square roots, so it
+/// is the same on every platform.
+fn guess(mode: Guess, before: &[(usize, i64)], t: usize) -> i64 {
+    let n = before.len();
+    let line = |a: (usize, i64), b: (usize, i64)| {
+        let slope = (b.1 - a.1) as f64 / (b.0 - a.0) as f64;
+        b.1 as f64 + slope * (t - b.0) as f64
+    };
+    let v = match (mode, n) {
+        (Guess::Zero, _) | (_, 0) => 0.0,
+        (Guess::Previous, _) | (_, 1) => before[n - 1].1 as f64,
+        (Guess::Line, _) | (_, 2) => line(before[n - 2], before[n - 1]),
+        (Guess::Circle, _) => {
+            let p = [before[n - 3], before[n - 2], before[n - 1]];
+            extrapolate(p, t).unwrap_or_else(|| line(p[1], p[2]))
+        }
+    };
+    v.round().clamp(-(1i64 << 50) as f64, (1i64 << 50) as f64) as i64
+}
+
+/// The circle through three anchors, in the plane `((t - t1)*alpha, v)`, at
+/// `t` on the branch of the last anchor.
+fn extrapolate(p: [(usize, i64); 3], t: usize) -> Option<f64> {
+    let v = p.map(|q| q.1 as f64);
+    let range = (v[0] - v[1])
+        .abs()
+        .max((v[1] - v[2]).abs())
+        .max((v[0] - v[2]).abs());
+    let span = (p[2].0 - p[0].0) as f64;
+    if range == 0.0 {
+        return None;
+    }
+    let alpha = 2.0 * range / span;
+    let x = p.map(|q| (q.0 as f64 - p[1].0 as f64) * alpha);
+    let (a00, a01) = (2.0 * (x[1] - x[0]), 2.0 * (v[1] - v[0]));
+    let (a10, a11) = (2.0 * (x[2] - x[1]), 2.0 * (v[2] - v[1]));
+    let b0 = x[1] * x[1] - x[0] * x[0] + v[1] * v[1] - v[0] * v[0];
+    let b1 = x[2] * x[2] - x[1] * x[1] + v[2] * v[2] - v[1] * v[1];
+    let det = a00 * a11 - a01 * a10;
+    if det.abs() <= 1e-9 * range * range {
+        return None;
+    }
+    let cx = (b0 * a11 - a01 * b1) / det;
+    let cy = (a00 * b1 - b0 * a10) / det;
+    let r2 = (x[2] - cx) * (x[2] - cx) + (v[2] - cy) * (v[2] - cy);
+    let dx = (t as f64 - p[1].0 as f64) * alpha - cx;
+    let inside = r2 - dx * dx;
+    if inside.is_nan() || inside < 0.0 || !r2.is_finite() {
+        return None;
+    }
+    let dy = inside.sqrt();
+    Some(if v[2] >= cy { cy + dy } else { cy - dy })
+}
+
+/// Gamma contexts: bit length of the previous value, capped.
+const CONTEXTS: usize = 20;
+fn context(v: u64) -> usize {
+    ((64 - v.leading_zeros()) as usize).min(CONTEXTS - 1)
+}
+
+/// Adaptive models: gaps by the previous gap's length; residual magnitudes by
+/// the previous magnitude's length and their signs by the previous two signs
+/// (extremes alternate).
+struct Models {
+    gaps: Vec<Gamma>,
+    magnitudes: Vec<Gamma>,
+    signs: [Prob; 9],
+    last_gap: u64,
+    last_magnitude: u64,
+    /// The last two signs, each 0 (zero), 1 (positive) or 2 (negative).
+    last_signs: usize,
+}
+impl Models {
+    fn new() -> Self {
+        Self {
+            gaps: vec![Gamma::new(); CONTEXTS],
+            magnitudes: vec![Gamma::new(); CONTEXTS],
+            signs: [Prob::NEW; 9],
+            last_gap: 0,
+            last_magnitude: 0,
+            last_signs: 0,
+        }
+    }
+    fn put_gap(&mut self, e: &mut RangeEncoder, gap: u64) {
+        self.gaps[context(self.last_gap)].put(e, gap);
+        self.last_gap = gap;
+    }
+    fn get_gap(&mut self, d: &mut RangeDecoder) -> Result<u64, Error> {
+        let gap = self.gaps[context(self.last_gap)].get(d)?;
+        self.last_gap = gap;
+        Ok(gap)
+    }
+    fn after(&mut self, r: i64) {
+        self.last_magnitude = r.unsigned_abs();
+        let sign = match r.signum() {
+            0 => 0,
+            1 => 1,
+            _ => 2,
+        };
+        self.last_signs = (self.last_signs % 3) * 3 + sign;
+    }
+    fn put_residual(&mut self, e: &mut RangeEncoder, r: i64) {
+        self.magnitudes[context(self.last_magnitude)].put(e, r.unsigned_abs());
+        if r != 0 {
+            e.bit(&mut self.signs[self.last_signs], r < 0);
+        }
+        self.after(r);
+    }
+    fn get_residual(&mut self, d: &mut RangeDecoder) -> Result<i64, Error> {
+        let m = self.magnitudes[context(self.last_magnitude)].get(d)?;
+        if m >= 1 << 50 {
+            return Err(corrupt());
+        }
+        let r = if m != 0 && d.bit(&mut self.signs[self.last_signs])? {
+            -(m as i64)
+        } else {
+            m as i64
+        };
+        self.after(r);
+        Ok(r)
+    }
+}
+
+/// Range-coded anchors: the first value, then per anchor its gap minus one
+/// (context: the previous gap) and the residual of its value from the guess
+/// (context: the previous residual).
+fn code(anchors: &[(usize, i64)], mode: Guess) -> Vec<u8> {
+    let mut e = RangeEncoder::new();
+    let mut m = Models::new();
+    for (j, &(t, v)) in anchors.iter().enumerate() {
+        if j > 0 {
+            m.put_gap(&mut e, (t - anchors[j - 1].0 - 1) as u64);
+        }
+        m.put_residual(&mut e, v - guess(mode, &anchors[..j], t));
+    }
+    e.finish()
+}
+
+/// Place anchors on `target` and pack them. Header: u32 count, f32 step, u8
+/// guess; then the range-coded gaps and value residuals.
 pub(super) fn encode(target: &[f64], config: &AnchorConfig) -> Result<Vec<u8>, Error> {
     config.validate()?;
     if target.is_empty() || target.iter().any(|v| !v.is_finite()) {
         return Err(Error::InvalidParameter("anchor target"));
     }
-    let anchors = place(target, config);
-    let indices: Vec<i64> = anchors
-        .iter()
-        .map(|&(_, v)| (v / config.step).round() as i64)
+    let anchors: Vec<(usize, i64)> = place(target, config)
+        .into_iter()
+        .map(|(t, v)| (t, (v / config.step).round() as i64))
         .collect();
-    let w_gap = anchors
-        .windows(2)
-        .map(|p| width((p[1].0 - p[0].0 - 1) as u64))
-        .max()
-        .unwrap_or(0);
-    let w_value = indices.iter().map(|&i| signed_width(i)).max().unwrap_or(0);
+    if std::env::var("SWL2_DEBUG").is_ok() {
+        let sizes: Vec<usize> = GUESSES.iter().map(|&m| code(&anchors, m).len()).collect();
+        eprintln!("ANCHORS n={} sizes={sizes:?}", anchors.len());
+    }
+    let (mode, body) = GUESSES
+        .iter()
+        .map(|&m| (m, code(&anchors, m)))
+        .min_by_key(|c| c.1.len())
+        .unwrap();
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&(anchors.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&(config.step as f32).to_le_bytes());
-    bytes.push(w_gap as u8);
-    bytes.push(w_value as u8);
-    let mut bits = BitWriter::new();
-    for p in anchors.windows(2) {
-        bits.put((p[1].0 - p[0].0 - 1) as u64, w_gap);
-    }
-    for &i in &indices {
-        bits.put_signed(i, w_value);
-    }
-    bytes.extend(bits.finish());
+    bytes.push(GUESSES.iter().position(|&g| g == mode).unwrap() as u8);
+    bytes.extend(body);
     Ok(bytes)
 }
 
@@ -309,27 +458,36 @@ pub(super) fn parse(payload: &[u8], len: usize) -> Result<Vec<(usize, f64)>, Err
     let mut b = Bytes::new(payload);
     let count = b.u32()? as usize;
     let step = f64::from(b.f32()?);
-    let w_gap = u32::from(b.u8()?);
-    let w_value = u32::from(b.u8()?);
-    if count == 0 || count > len || !(1e-3..=1e6).contains(&step) || w_gap > 32 || w_value > 62 {
+    let mode = *GUESSES.get(usize::from(b.u8()?)).ok_or_else(corrupt)?;
+    if count == 0 || count > len || !(1e-3..=1e6).contains(&step) {
         return Err(corrupt());
     }
-    let mut bits = BitReader::new(b.rest());
-    let mut positions = Vec::with_capacity(count);
-    positions.push(0usize);
-    for _ in 1..count {
-        let next = positions[positions.len() - 1] + bits.get(w_gap)? as usize + 1;
-        if next >= len {
-            return Err(corrupt());
-        }
-        positions.push(next);
+    let mut d = RangeDecoder::new(b.rest())?;
+    let mut m = Models::new();
+    let mut anchors: Vec<(usize, i64)> = Vec::with_capacity(count);
+    for j in 0..count {
+        let t = if j == 0 {
+            0
+        } else {
+            let gap = m.get_gap(&mut d)?;
+            let t = anchors[j - 1].0 as u64 + gap + 1;
+            if t >= len as u64 {
+                return Err(corrupt());
+            }
+            t as usize
+        };
+        let r = m.get_residual(&mut d)?;
+        let v = guess(mode, &anchors, t)
+            .checked_add(r)
+            .filter(|v| v.abs() < 1 << 50)
+            .ok_or_else(corrupt)?;
+        anchors.push((t, v));
     }
-    if positions[count - 1] != len - 1 {
+    if anchors[count - 1].0 != len - 1 {
         return Err(corrupt());
     }
-    let mut anchors = Vec::with_capacity(count);
-    for p in positions {
-        anchors.push((p, bits.get_signed(w_value)? as f64 * step));
-    }
-    Ok(anchors)
+    Ok(anchors
+        .into_iter()
+        .map(|(t, v)| (t, v as f64 * step))
+        .collect())
 }
